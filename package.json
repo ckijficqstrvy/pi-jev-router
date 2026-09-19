@@ -1,0 +1,48 @@
+{
+  "name": "pi-jev-model-router",
+  "version": "0.1.1",
+  "description": "Route pi prompts to task-appropriate model tiers with TypeSafe Jev typed judgments. Budget-aware, with automatic fallback.",
+  "author": {
+    "name": "Shah Rukh",
+    "email": "shah@da-vinci-noob.com"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "typesafe",
+    "jev",
+    "system-one",
+    "model-router",
+    "model-routing",
+    "llm-routing",
+    "budget"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/da-vinci-noob/pi-jev-model-router.git"
+  },
+  "homepage": "https://github.com/da-vinci-noob/pi-jev-model-router#readme",
+  "bugs": {
+    "url": "https://github.com/da-vinci-noob/pi-jev-model-router/issues"
+  },
+  "files": [
+    "extensions",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/pi-jev-model-router/index.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/da-vinci-noob/pi-jev-model-router/main/assets/decision-entry.png"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}
