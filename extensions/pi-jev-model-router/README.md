@@ -187,3 +187,13 @@ as an error.
 Routing never blocks your turn. A missing key, network error, timeout (default
 3.5 s, retried on 429/529), or unknown model means: warn in the status line and
 run the prompt on the current model unchanged.
+
+## Compatibility
+
+Optional `ExtensionAPI` surfaces are feature-detected, so the extension loads on
+older pi builds and downstream forks. If `registerEntryRenderer` or
+`@earendil-works/pi-tui` is unavailable, the transcript card is skipped and
+decisions still appear via the status bar and notifications. Missing
+`appendEntry`, `ctx.ui.select`, or `modelRegistry.find` degrade to no persistence,
+auto-switching, or "leave the model unchanged" respectively. `@earendil-works/pi-tui`
+is an optional peer dependency.

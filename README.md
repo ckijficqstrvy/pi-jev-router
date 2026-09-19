@@ -71,7 +71,7 @@ pi install npm:pi-jev-model-router
 From a pinned git ref:
 
 ```bash
-pi install git:github.com/da-vinci-noob/pi-jev-model-router@v0.1.1
+pi install git:github.com/da-vinci-noob/pi-jev-model-router@v0.1.2
 ```
 
 From a local checkout:
@@ -424,8 +424,29 @@ Layout:
 | `extensions/pi-jev-model-router/router.ts` | composition (`decide`), tier/kind chains, availability fallback |
 | `extensions/pi-jev-model-router/budget.ts` | spend ledger, caps, pressure |
 
-No runtime dependencies: the extension talks to TypeSafe with `fetch` and imports
-only the pi-hosted packages listed under `peerDependencies`.
+No runtime dependencies: the extension talks to TypeSafe with plain `fetch`. It
+imports `typebox` (tool schema) and `@earendil-works/pi-coding-agent` (config
+directory path), and loads `@earendil-works/pi-tui` **lazily**, only when the host
+implements `registerEntryRenderer`. `@earendil-works/pi-tui` is declared as an
+**optional** peer dependency, so hosts that don't ship it still install and run.
+
+## Compatibility with pi builds and forks
+
+`ExtensionAPI` surfaces differ across pi versions and downstream forks (for
+example `omp`). The extension probes the host at load time and degrades instead
+of failing installation:
+
+| Capability | If the host lacks it |
+| --- | --- |
+| `registerEntryRenderer` or `@earendil-works/pi-tui` | No transcript card; decisions still show in the status bar and notifications |
+| `appendEntry` | Decisions are not persisted as session entries |
+| `ctx.ui.notify` / `ctx.ui.setStatus` | Silently skipped |
+| `ctx.ui.select` | `confirm` mode falls back to auto-switching |
+| `ctx.modelRegistry.find` / `getAvailable` | Reports "model not available in this build" and leaves the current model in place |
+| `registerCommand` / `registerTool` | Commands and the tool are not registered; event-driven routing still works |
+
+Nothing in the extension throws during load if an optional API is missing, so
+`pi install`, `omp install`, or any plugin validator will accept it.
 
 ## License
 

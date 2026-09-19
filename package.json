@@ -1,6 +1,6 @@
 {
   "name": "pi-jev-model-router",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Route pi prompts to task-appropriate model tiers with TypeSafe Jev typed judgments. Budget-aware, with automatic fallback.",
   "author": {
     "name": "Shah Rukh",
@@ -44,5 +44,10 @@
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
   }
 }

@@ -11,7 +11,6 @@
  * Tool:      jev_route
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { apiKeyFor, hasApiKey, loadConfig, TIERS, type JevRouterConfig } from "./config";
 import {
@@ -69,11 +68,34 @@ interface DecisionEntry {
 }
 
 function appendEntry(data: DecisionEntry, runtime: Runtime): void {
-  if (!api) return;
+  // `appendEntry` is optional across pi builds and forks.
+  if (!api || typeof api.appendEntry !== "function") return;
   const signature = `${data.action}|${data.skipReason ?? ""}|${data.model}|${data.reason}`;
   if (runtime.lastEntrySignature === signature) return;
   runtime.lastEntrySignature = signature;
-  api.appendEntry<DecisionEntry>("jev-router-decision", data);
+  try {
+    api.appendEntry<DecisionEntry>("jev-router-decision", data);
+  } catch {
+    // Durable entries are a nice-to-have; never let them break routing.
+  }
+}
+
+/** ctx.ui.notify is present in every documented mode, but forks vary. */
+function notify(ctx: ExtensionContext, text: string, level: "info" | "warning" | "error" = "info"): void {
+  try {
+    ctx.ui?.notify?.(text, level);
+  } catch {
+    // Ignore UI failures.
+  }
+}
+
+/** Status-bar updates are cosmetic and optional. */
+function setStatus(ctx: ExtensionContext, text: string): void {
+  try {
+    ctx.ui?.setStatus?.("jev-router", text);
+  } catch {
+    // Ignore UI failures.
+  }
 }
 
 function appendDecisionEntry(
@@ -139,12 +161,18 @@ function appendSkipEntry(skipReason: string, ctx: ExtensionContext, runtime: Run
 }
 
 function toAvailable(ctx: ExtensionContext): AvailableModel[] {
-  return ctx.modelRegistry.getAvailable().map((model) => ({
-    provider: model.provider,
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-  }));
+  try {
+    const list = ctx.modelRegistry?.getAvailable?.();
+    if (!Array.isArray(list)) return [];
+    return list.map((model) => ({
+      provider: model.provider,
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 function currentModelKey(ctx: ExtensionContext): string | undefined {
@@ -202,7 +230,7 @@ function shouldSkip(text: string, config: JevRouterConfig, hasHistory: boolean):
 function statusLine(ctx: ExtensionContext, runtime: Runtime): void {
   const spend = spendSnapshot(runtime.ledger, runtime.config.budget);
   if (!runtime.config.enabled) {
-    ctx.ui.setStatus("jev-router", "jev-router:off");
+    setStatus(ctx, "jev-router:off");
     return;
   }
   const tier = runtime.appliedTierIndex !== undefined ? TIERS[runtime.appliedTierIndex] : "on";
@@ -210,7 +238,7 @@ function statusLine(ctx: ExtensionContext, runtime: Runtime): void {
   if (spend.today > 0) parts.push(formatUsd(spend.today));
   if (spend.pressure > 0) parts.push(`${Math.round(spend.pressure * 100)}%`);
   if (runtime.config.mode !== "auto") parts.push(runtime.config.mode);
-  ctx.ui.setStatus("jev-router", parts.join(" · "));
+  setStatus(ctx, parts.join(" · "));
 }
 
 async function analyse(
@@ -231,7 +259,7 @@ async function analyse(
       history: historyExcerpt(ctx, config.historyTurns),
       cwd: ctx.cwd,
       activeModel: currentModelKey(ctx),
-      contextTokens: ctx.getContextUsage()?.tokens,
+      contextTokens: ctx.getContextUsage?.()?.tokens,
       spend,
     },
     config,
@@ -270,18 +298,23 @@ async function applyDecision(
     runtime.appliedTierIndex = decision.tierIndex;
     runtime.lastDecision = decision;
     runtime.lastAnalysis = analysis;
-    ctx.ui.setStatus("jev-router", `jev-router:${decision.tier} ✓`);
+    setStatus(ctx, `jev-router:${decision.tier} ✓`);
     appendDecisionEntry(analysis, decision, "kept", runtime);
     return { action: "kept", message: `${headline} — already active` };
   }
 
   if (runtime.config.mode === "notify") {
-    ctx.ui.notify(`${headline}\n${detail}`, "info");
+    notify(ctx, `${headline}\n${detail}`, "info");
     appendDecisionEntry(analysis, decision, "notified", runtime);
     return { action: "notified", message: `${headline} (notify only)` };
   }
 
-  if (runtime.config.mode === "confirm" && options.allowPrompt !== false) {
+  // Confirm mode needs a working select prompt; otherwise fall through to auto-switch.
+  if (
+    runtime.config.mode === "confirm" &&
+    options.allowPrompt !== false &&
+    typeof ctx.ui?.select === "function"
+  ) {
     const cheaper = TIERS[Math.max(0, decision.tierIndex - 1)];
     const cheaperTarget = runtime.config.routes[cheaper][0];
     const options_ = [
@@ -305,12 +338,13 @@ async function applyDecision(
     }
   }
 
-  const model = decision.model
-    ? ctx.modelRegistry.find(decision.model.provider, decision.model.id)
-    : undefined;
+  const model =
+    decision.model && typeof ctx.modelRegistry?.find === "function"
+      ? ctx.modelRegistry.find(decision.model.provider, decision.model.id)
+      : undefined;
   if (!model) {
     appendDecisionEntry(analysis, decision, "skipped", runtime);
-    return { action: "skipped", message: `${headline} — model not found locally` };
+    return { action: "skipped", message: `${headline} — model not available in this build` };
   }
 
   const previous = currentModelKey(ctx);
@@ -329,7 +363,7 @@ async function applyDecision(
   runtime.lastDecision = decision;
   runtime.lastAnalysis = analysis;
   statusLine(ctx, runtime);
-  ctx.ui.notify(`${headline}\n${detail}`, "info");
+  notify(ctx, `${headline}\n${detail}`, "info");
   appendDecisionEntry(analysis, decision, "switched", runtime);
   return { action: "switched", message: `${headline}` };
 }
@@ -339,7 +373,7 @@ async function applyDecision(
 let api: ExtensionAPI | undefined;
 
 async function switchModel(model: unknown): Promise<boolean> {
-  if (!api) return false;
+  if (!api || typeof api.setModel !== "function") return false;
   try {
     return await api.setModel(model as never);
   } catch {
@@ -348,8 +382,9 @@ async function switchModel(model: unknown): Promise<boolean> {
 }
 
 function setThinking(level: string): void {
+  if (!api || typeof api.setThinkingLevel !== "function") return;
   try {
-    api?.setThinkingLevel(level as never);
+    api.setThinkingLevel(level as never);
   } catch {
     // Clamping is model-specific; ignore unsupported levels.
   }
@@ -370,7 +405,7 @@ function formatAnalysis(analysis: RouteAnalysis): string {
   ].join("\n");
 }
 
-export default function jevRouterExtension(pi: ExtensionAPI): void {
+export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void> {
   api = pi;
 
   const runtime: Runtime = {
@@ -379,44 +414,59 @@ export default function jevRouterExtension(pi: ExtensionAPI): void {
     models: [],
   };
 
-  // Durable, TUI-only record of each routing decision. Never sent to the LLM.
-  pi.registerEntryRenderer<DecisionEntry>("jev-router-decision", (entry, { expanded }, theme) => {
-    const data = entry.data;
-    const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-    if (!data) {
-      box.addChild(new Text(theme.fg("dim", "jev-router: no decision data"), 0, 0));
-      return box;
+  // Not every pi build/fork exposes the full ExtensionAPI surface. Detect the
+  // optional capabilities once so their absence degrades instead of failing install.
+  const hasCommands = typeof pi.registerCommand === "function";
+  const hasTools = typeof pi.registerTool === "function";
+
+  // Optional: durable, TUI-only record of each routing decision (never sent to the LLM).
+  // `registerEntryRenderer` and the pi-tui components are not available in every pi
+  // build or fork, so feature-detect them and never let rendering break extension load.
+  if (typeof pi.registerEntryRenderer === "function") {
+    try {
+      const { Box, Text } = await import("@earendil-works/pi-tui");
+      pi.registerEntryRenderer<DecisionEntry>("jev-router-decision", (entry, { expanded }, theme) => {
+        const data = entry.data;
+        const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+        if (!data) {
+          box.addChild(new Text(theme.fg("dim", "jev-router: no decision data"), 0, 0));
+          return box;
+        }
+        const glyph =
+          data.action === "switched" ? "→" : data.action === "kept" ? "=" : data.action === "notified" ? "•" : "×";
+        const label = data.skipReason ? `${theme.fg("accent", "jev-router ·")} ${theme.bold("not routed")}` : `${theme.fg("accent", `jev-router ${glyph} ${data.tier}`)}  ${theme.bold(data.model)}`;
+        box.addChild(new Text(label, 0, 0));
+        if (data.skipReason) {
+          box.addChild(new Text(theme.fg("dim", `${data.reason}`), 0, 0));
+          box.addChild(new Text(theme.fg("dim", `using ${data.model}`), 0, 0));
+          return box;
+        }
+        box.addChild(new Text(theme.fg("dim", data.reason), 0, 0));
+        if (data.notes.length > 0) {
+          box.addChild(new Text(theme.fg("dim", data.notes.map((note) => `· ${note}`).join("\n")), 0, 0));
+        }
+        if (expanded) {
+          box.addChild(
+            new Text(
+              theme.fg(
+                "dim",
+                `kind ${data.kind} (conf ${data.kindConfidence.toFixed(2)}) · ` +
+                  `complexity ${data.complexity.toFixed(2)}/3 · capability ${data.capability.toFixed(2)}/3 · ` +
+                  `deep reasoning ${(data.deepReasoning * 100).toFixed(0)}% · demand ${data.demand.toFixed(2)}` +
+                  (data.pressure > 0 ? ` · budget ${(data.pressure * 100).toFixed(0)}% of cap` : ""),
+              ),
+              0,
+              0,
+            ),
+          );
+        }
+        return box;
+      });
+    } catch {
+      // TUI rendering unavailable in this build: decisions are still reported
+      // through the status bar and notify, and persist as session entries.
     }
-    const glyph =
-      data.action === "switched" ? "→" : data.action === "kept" ? "=" : data.action === "notified" ? "•" : "×";
-    const label = data.skipReason ? `${theme.fg("accent", "jev-router ·")} ${theme.bold("not routed")}` : `${theme.fg("accent", `jev-router ${glyph} ${data.tier}`)}  ${theme.bold(data.model)}`;
-    box.addChild(new Text(label, 0, 0));
-    if (data.skipReason) {
-      box.addChild(new Text(theme.fg("dim", `${data.reason}`), 0, 0));
-      box.addChild(new Text(theme.fg("dim", `using ${data.model}`), 0, 0));
-      return box;
-    }
-    box.addChild(new Text(theme.fg("dim", data.reason), 0, 0));
-    if (data.notes.length > 0) {
-      box.addChild(new Text(theme.fg("dim", data.notes.map((note) => `· ${note}`).join("\n")), 0, 0));
-    }
-    if (expanded) {
-      box.addChild(
-        new Text(
-          theme.fg(
-            "dim",
-            `kind ${data.kind} (conf ${data.kindConfidence.toFixed(2)}) · ` +
-              `complexity ${data.complexity.toFixed(2)}/3 · capability ${data.capability.toFixed(2)}/3 · ` +
-              `deep reasoning ${(data.deepReasoning * 100).toFixed(0)}% · demand ${data.demand.toFixed(2)}` +
-              (data.pressure > 0 ? ` · budget ${(data.pressure * 100).toFixed(0)}% of cap` : ""),
-          ),
-          0,
-          0,
-        ),
-      );
-    }
-    return box;
-  });
+  }
 
   pi.on("session_start", async (_event, ctx) => {
     runtime.config = loadConfig(ctx.cwd);
@@ -425,7 +475,7 @@ export default function jevRouterExtension(pi: ExtensionAPI): void {
     runtime.appliedTierIndex = tierForModel(currentModelKey(ctx), runtime.config);
     statusLine(ctx, runtime);
     if (runtime.config.enabled && !hasApiKey(runtime.config)) {
-      ctx.ui.notify(
+      notify(ctx, 
         `pi-jev-model-router: no API key. Set ${runtime.config.apiKeyEnv} or add "apiKey" to ~/.pi/agent/pi-jev-model-router.json.`,
         "warning",
       );
@@ -474,12 +524,12 @@ export default function jevRouterExtension(pi: ExtensionAPI): void {
     }
 
     runtime.lastPrompt = text.trim();
-    ctx.ui.setStatus("jev-router", "jev-router:…");
+    setStatus(ctx, "jev-router:…");
     try {
       const result = await analyse(text, ctx, runtime);
       if ("error" in result) {
         statusLine(ctx, runtime);
-        ctx.ui.notify(`jev-router: ${result.error}`, "warning");
+        notify(ctx, `jev-router: ${result.error}`, "warning");
         return { action: "continue" };
       }
       const { analysis, decision } = result;
@@ -493,12 +543,12 @@ export default function jevRouterExtension(pi: ExtensionAPI): void {
     } catch (error) {
       statusLine(ctx, runtime);
       const message = error instanceof JevError ? error.message : error instanceof Error ? error.message : String(error);
-      if (!/abort/i.test(message)) ctx.ui.notify(`jev-router: ${message}`, "warning");
+      if (!/abort/i.test(message)) notify(ctx, `jev-router: ${message}`, "warning");
     }
     return { action: "continue" };
   });
 
-  pi.registerCommand("jev-router", {
+  if (hasCommands) pi.registerCommand("jev-router", {
     description: "TypeSafe Jev model router: status, on/off, mode, budget",
     handler: async (args, ctx) => {
       const [sub, ...rest] = args.trim().split(/\s+/).filter(Boolean);
@@ -506,68 +556,71 @@ export default function jevRouterExtension(pi: ExtensionAPI): void {
         case "on":
           runtime.config.enabled = true;
           statusLine(ctx, runtime);
-          ctx.ui.notify("jev-router enabled", "info");
+          notify(ctx, "jev-router enabled", "info");
           return;
         case "off":
           runtime.config.enabled = false;
           statusLine(ctx, runtime);
-          ctx.ui.notify("jev-router disabled", "info");
+          notify(ctx, "jev-router disabled", "info");
           return;
         case "mode": {
           const mode = (rest[0] ?? "").toLowerCase();
           if (mode !== "auto" && mode !== "confirm" && mode !== "notify") {
-            ctx.ui.notify("usage: /jev-router mode auto|confirm|notify", "warning");
+            notify(ctx, "usage: /jev-router mode auto|confirm|notify", "warning");
             return;
           }
           runtime.config.mode = mode;
           statusLine(ctx, runtime);
-          ctx.ui.notify(`jev-router mode: ${mode}`, "info");
+          notify(ctx, `jev-router mode: ${mode}`, "info");
           return;
         }
         case "budget": {
           const [, amountRaw] = rest;
           const amount = Number.parseFloat(amountRaw ?? "");
           if (!Number.isFinite(amount) || amount <= 0) {
-            ctx.ui.notify("usage: /jev-router budget daily|monthly <usd>", "warning");
+            notify(ctx, "usage: /jev-router budget daily|monthly <usd>", "warning");
             return;
           }
           if (rest[0] === "daily") runtime.config.budget.dailyUsd = amount;
           else if (rest[0] === "monthly") runtime.config.budget.monthlyUsd = amount;
           else {
-            ctx.ui.notify("usage: /jev-router budget daily|monthly <usd>", "warning");
+            notify(ctx, "usage: /jev-router budget daily|monthly <usd>", "warning");
             return;
           }
           statusLine(ctx, runtime);
-          ctx.ui.notify(`budget ${rest[0]} cap: ${formatUsd(amount)} (session only — persist in pi-jev-model-router.json)`, "info");
+          notify(ctx, `budget ${rest[0]} cap: ${formatUsd(amount)} (session only — persist in pi-jev-model-router.json)`, "info");
           return;
         }
         case "revert": {
           if (!runtime.previousModelKey) {
-            ctx.ui.notify("no previous model recorded", "warning");
+            notify(ctx, "no previous model recorded", "warning");
             return;
           }
           const [provider, ...idParts] = runtime.previousModelKey.split("/");
-          const model = ctx.modelRegistry.find(provider, idParts.join("/"));
+          const model =
+            typeof ctx.modelRegistry?.find === "function"
+              ? ctx.modelRegistry.find(provider, idParts.join("/"))
+              : undefined;
           if (!model) {
-            ctx.ui.notify(`previous model not found: ${runtime.previousModelKey}`, "warning");
+            notify(ctx, `previous model not found: ${runtime.previousModelKey}`, "warning");
             return;
           }
-          await pi.setModel(model);
-          ctx.ui.notify(`reverted to ${runtime.previousModelKey}`, "info");
+          await switchModel(model);
+          notify(ctx, `reverted to ${runtime.previousModelKey}`, "info");
           return;
         }
         case "why": {
           if (!runtime.lastPrompt) {
-            ctx.ui.notify("no routed prompt yet in this session", "warning");
+            notify(ctx, "no routed prompt yet in this session", "warning");
             return;
           }
           const result = await analyse(runtime.lastPrompt, ctx, runtime);
           if ("error" in result) {
-            ctx.ui.notify(result.error, "warning");
+            notify(ctx, result.error, "warning");
             return;
           }
           const { analysis, decision } = result;
-          ctx.ui.notify(
+          notify(ctx, 
             [
               formatAnalysis(analysis),
               "",
@@ -615,35 +668,35 @@ export default function jevRouterExtension(pi: ExtensionAPI): void {
             "",
             "commands: /jev-router on|off|mode|budget|why|revert · /jev-route <text>",
           ];
-          ctx.ui.notify(lines.join("\n"), "info");
+          notify(ctx, lines.join("\n"), "info");
           return;
         }
       }
     },
   });
 
-  pi.registerCommand("jev-route", {
+  if (hasCommands) pi.registerCommand("jev-route", {
     description: "Ask Jev which model tier a request deserves (no switching)",
     handler: async (args, ctx) => {
       const text = args.trim() || runtime.lastPrompt || "";
       if (!text) {
-        ctx.ui.notify("usage: /jev-route <text>", "warning");
+        notify(ctx, "usage: /jev-route <text>", "warning");
         return;
       }
       const result = await analyse(text, ctx, runtime);
       if ("error" in result) {
-        ctx.ui.notify(result.error, "warning");
+        notify(ctx, result.error, "warning");
         return;
       }
       const { analysis, decision } = result;
-      ctx.ui.notify(
+      notify(ctx, 
         [formatAnalysis(analysis), "", decision ? describeDecision(decision) : "no route available"].join("\n"),
         "info",
       );
     },
   });
 
-  pi.registerTool({
+  if (hasTools) pi.registerTool({
     name: "jev_route",
     label: "Jev Route",
     description:
