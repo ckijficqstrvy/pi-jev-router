@@ -169,6 +169,14 @@ function toAvailable(ctx: ExtensionContext): AvailableModel[] {
       id: model.id,
       name: model.name,
       reasoning: model.reasoning,
+      cost: model.cost
+        ? {
+            input: model.cost.input,
+            output: model.cost.output,
+            cacheRead: model.cost.cacheRead,
+            cacheWrite: model.cost.cacheWrite,
+          }
+        : undefined,
     }));
   } catch {
     return [];
@@ -252,14 +260,17 @@ async function analyse(
   }
   if (runtime.models.length === 0) runtime.models = toAvailable(ctx);
   const spend = spendSnapshot(runtime.ledger, config.budget);
+  // Context size prices the cache miss a switch would cause.
+  const contextTokens = ctx.getContextUsage?.()?.tokens;
+  const activeKey = currentModelKey(ctx);
 
   const analysis = await classifyRequest(
     {
       prompt,
       history: historyExcerpt(ctx, config.historyTurns),
       cwd: ctx.cwd,
-      activeModel: currentModelKey(ctx),
-      contextTokens: ctx.getContextUsage?.()?.tokens,
+      activeModel: activeKey,
+      contextTokens,
       spend,
     },
     config,
@@ -269,7 +280,15 @@ async function analyse(
 
   if (analysis.usage) recordJevUsage(runtime.ledger, analysis.usage.input_tokens, analysis.usage.output_tokens);
   saveLedger(config.stateFile, runtime.ledger);
-  const decision = decide(analysis, config, { models: runtime.models, spend });
+  const decision = decide(analysis, config, {
+    models: runtime.models,
+    spend,
+    contextTokens,
+    current: {
+      index: tierForModel(activeKey, config),
+      model: runtime.models.find((model) => `${model.provider}/${model.id}` === activeKey),
+    },
+  });
   return { analysis, decision };
 }
 
@@ -292,7 +311,9 @@ async function applyDecision(
   const detail = `${decision.reason}${decision.notes.length ? ` · ${decision.notes.join(" · ")}` : ""}`;
   const currentKey = currentModelKey(ctx);
   const targetKey = decision.model ? `${decision.model.provider}/${decision.model.id}` : undefined;
-  const keepCurrent = runtime.config.stickiness && targetKey !== undefined && currentKey === targetKey;
+  const keepCurrent =
+    decision.held === true ||
+    (runtime.config.stickiness && targetKey !== undefined && currentKey === targetKey);
 
   if (keepCurrent) {
     runtime.appliedTierIndex = decision.tierIndex;
@@ -645,6 +666,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
             `spend today: ${formatUsd(spend.today)}${spend.dailyCap ? ` / ${formatUsd(spend.dailyCap)}` : ""}`,
             `spend month: ${formatUsd(spend.month)}${spend.monthlyCap ? ` / ${formatUsd(spend.monthlyCap)}` : ""}`,
             `budget pressure: ${spend.pressure > 0 ? `${(spend.pressure * 100).toFixed(0)}%` : "no caps set"}`,
+            `cache-aware: ${runtime.config.cache.aware ? `on (cap ${formatUsd(runtime.config.cache.maxPenaltyUsd)}, deadband ${runtime.config.cache.deadband})` : "off"}`,
             `jev requests: ${runtime.ledger.jev.requests}`,
             "",
             "routes:",

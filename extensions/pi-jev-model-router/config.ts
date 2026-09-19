@@ -45,6 +45,28 @@ export interface BudgetConfig {
   hardRatio: number;
 }
 
+/**
+ * Model switches invalidate the provider's prompt cache, so the next request
+ * re-reads the whole prefix at full input price. These knobs keep the router
+ * from paying that penalty for a marginal tier change.
+ */
+export interface CacheConfig {
+  /** Master switch for cache/cost-aware hold decisions. */
+  aware: boolean;
+  /**
+   * Demand must clear the current tier's band (tier ± 0.5) by this much before a
+   * switch is considered. Damps flapping between adjacent tiers.
+   */
+  deadband: number;
+  /**
+   * Skip a switch whose estimated cache penalty exceeds this many USD, unless it
+   * is a large upgrade. Set to 0 to allow any switch regardless of penalty.
+   */
+  maxPenaltyUsd: number;
+  /** Tier jumps this large always switch, since they are quality-critical. */
+  bypassTierDelta: number;
+}
+
 export interface JevRouterConfig {
   enabled: boolean;
   mode: Mode;
@@ -71,6 +93,7 @@ export interface JevRouterConfig {
   /** Floor tier per task kind, so e.g. planning never lands on the quick model. */
   kindMinimumTier: Record<string, Tier>;
   budget: BudgetConfig;
+  cache: CacheConfig;
 }
 
 export const DEFAULT_CONFIG: JevRouterConfig = {
@@ -177,6 +200,12 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
     softRatio: 0.7,
     hardRatio: 0.9,
   },
+  cache: {
+    aware: true,
+    deadband: 0.25,
+    maxPenaltyUsd: 0.05,
+    bypassTierDelta: 2,
+  },
 };
 
 function readJson(path: string): unknown | undefined {
@@ -221,6 +250,7 @@ function merge(base: JevRouterConfig, patch: unknown): JevRouterConfig {
     routes,
     kindModels,
     budget: { ...base.budget, ...asRecord(p.budget) } as BudgetConfig,
+    cache: { ...base.cache, ...asRecord(p.cache) } as CacheConfig,
     kindMinimumTier: {
       ...base.kindMinimumTier,
       ...(asRecord(p.kindMinimumTier) as Record<string, Tier>),

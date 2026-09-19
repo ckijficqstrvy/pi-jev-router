@@ -32,7 +32,7 @@ you type a prompt
    code composes the decision
      demand = 0.55·complexity + 0.45·capability (+ reasoning nudge)
      demand = max(demand, kind floor)          # planning/review never go cheap
-     confidence guard → budget guard → availability guard
+     confidence guard → budget guard → availability guard → cache guard
         │
         ▼
    pi.setModel(...) + pi.setThinkingLevel(...)  → the turn runs on that model
@@ -71,7 +71,7 @@ pi install npm:pi-jev-model-router
 From a pinned git ref:
 
 ```bash
-pi install git:github.com/da-vinci-noob/pi-jev-model-router@v0.1.2
+pi install git:github.com/da-vinci-noob/pi-jev-model-router@v0.2.0
 ```
 
 From a local checkout:
@@ -328,6 +328,52 @@ pressure = max(today ÷ dailyUsd, month ÷ monthlyUsd)
 Omit either cap to disable that dimension. Caps are policy, not a hard stop —
 they redirect routing, they do not block turns.
 
+## Prompt-cache awareness
+
+Switching models discards the provider's prompt cache, and caches are per-model.
+The next request then re-reads the entire prefix — system prompt, tool schemas,
+and conversation — at the new model's full input rate. Cache reads are ~10% of
+input on the major providers, so a switch effectively costs the whole context
+once, and a switch back costs it again. On a 50k context that is roughly
+$0.10 on Sonnet; at 200k, roughly $0.45.
+
+The router therefore gates switches instead of making them freely:
+
+- **Cache penalty cap** — estimates the miss (`contextTokens × new model's input
+  rate`, minus the cached rate) and refuses the switch when it exceeds
+  `maxPenaltyUsd`.
+- **Dead-band** — demand has to clear the current tier's band (`tier ± 0.5`) by
+  `deadband` before a tier change is considered, so prompts hovering on a
+  boundary stop flapping between two models.
+- **Big-jump bypass** — a tier jump of `bypassTierDelta` or more still switches,
+  because that is a genuine capability change rather than a marginal one.
+- **Same-tier swaps count too** — a specialist swap such as Sonnet → Codex at the
+  same tier is still a model change, and is priced the same way.
+
+Held turns still record the decision, and say so:
+
+```
+jev-router = high  openrouter/~anthropic/claude-sonnet-latest
+explain · complexity 0.40/3 · capability 0.30/3 · reasoning 0.20 → standard, held on high to keep the cache
+· cache penalty ~$0.186 on 120k tokens — keeping the warm cache
+```
+
+The estimate is a lower bound — real cacheable prefixes include the system prompt
+and tool schemas, which `contextTokens` does not count — and it is skipped
+entirely when a model's pricing is unknown, so it never blocks on guesses. Set
+`cache.aware: false` to restore unconditional switching.
+
+```json
+{
+  "cache": {
+    "aware": true,
+    "deadband": 0.25,
+    "maxPenaltyUsd": 0.05,
+    "bypassTierDelta": 2
+  }
+}
+```
+
 ## Configuration reference
 
 | Key | Default | Purpose |
@@ -346,6 +392,7 @@ they redirect routing, they do not block turns.
 | `kindModels` | see above | Task-specialist chains with `minTier` |
 | `kindMinimumTier` | see above | Per-kind floor tier |
 | `budget` | no caps | Spend policy |
+| `cache` | `aware`, cap `$0.05`, deadband `0.25` | Prompt-cache-aware switching |
 | `stateFile` | `~/.pi/agent/pi-jev-model-router-state.json` | Spend ledger |
 
 ## Failure behaviour

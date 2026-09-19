@@ -19,7 +19,7 @@ you type a prompt
    code composes the decision
      demand = 0.55·complexity + 0.45·capability (+ reasoning nudge)
      demand = max(demand, kind floor)          # planning/review never go cheap
-     confidence guard → budget guard → availability guard
+     confidence guard → budget guard → availability guard → cache guard
         │
         ▼
    pi.setModel(node) + pi.setThinkingLevel(node)  → the turn runs on that model
@@ -150,6 +150,24 @@ Rules of thumb baked into the defaults:
 Spend is accumulated from each assistant message's computed cost into
 `~/.pi/agent/pi-jev-model-router-state.json`, alongside Jev request counts.
 
+### Prompt-cache awareness
+
+Caches are per-model, so any switch makes the next request re-read the whole
+prefix at full input price — cache reads are only ~10% of input, so one switch
+costs roughly the entire context once, on every provider. The router gates
+switches instead of making them freely:
+
+- `maxPenaltyUsd` — estimated miss (`contextTokens × new input rate − cached
+  rate`) above this blocks the switch
+- `deadband` — demand must clear the current tier's band (`tier ± 0.5`) by this
+  much before a tier change happens, so boundary-hovering prompts stop flapping
+- `bypassTierDelta` — a jump this large still switches (genuine capability change)
+- same-tier specialist swaps are priced identically, since they are still model
+  changes
+
+Set `cache.aware: false` to switch unconditionally. The estimate is skipped when
+pricing is unknown, so it never blocks on guesses.
+
 ### Confidence
 
 If Jev's `task_kind` confidence is below `confidenceThreshold` and the suggested
@@ -159,11 +177,12 @@ as an error.
 
 ## Tuning notes
 
-- `stickiness: true` avoids re-switching when the chosen model is already active,
-  which preserves prompt cache and avoids model thrash between similar prompts.
-- A model switch resets the provider prompt cache. If you care about cache-hit
-  costs more than per-turn fit, raise `stickiness` behaviour by pinning tiers
-  (`routes.high = routes.standard = ...`).
+- A model switch resets the provider prompt cache. `cache.aware` (default on)
+  gates switches by their estimated cache penalty, so tune `cache.maxPenaltyUsd`
+  down for more switching, or up for more stickiness. `cache.aware: false`
+  restores unconditional switching.
+- `stickiness: true` is the cheap version of the same idea: it avoids re-applying
+  a decision when the chosen model is already active.
 - Model IDs are provider-scoped; the defaults assume `openrouter`. Swap them for
   whatever providers you have configured. `/jev-router status` marks each route
   `✓`/`✗` based on what is actually available and authenticated.

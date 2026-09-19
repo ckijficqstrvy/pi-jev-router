@@ -9,6 +9,8 @@ export interface AvailableModel {
   id: string;
   name?: string;
   reasoning?: boolean;
+  /** Per-million-token rates, straight from the pi model catalogue. */
+  cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
 export interface Decision {
@@ -25,6 +27,8 @@ export interface Decision {
   lowConfidenceFallback: boolean;
   /** True when kind-specific models (not the generic tier chain) were used. */
   kindSpecialised: boolean;
+  /** True when the router deliberately stayed put to preserve the prompt cache. */
+  held?: boolean;
   reason: string;
   notes: string[];
 }
@@ -76,6 +80,51 @@ export function tierForModel(modelKey: string | undefined, config: JevRouterConf
 export interface DecideOptions {
   models: readonly AvailableModel[];
   spend: SpendSnapshot;
+  /** Tokens currently in context, used to price the cost of a cache miss. */
+  contextTokens?: number;
+  /** The model in use right now, so we never pay a cache miss for a marginal change. */
+  current?: { index?: number; model?: AvailableModel };
+}
+
+/**
+ * Estimated extra cost of switching away from a warm prompt cache.
+ *
+ * Staying put re-reads the prefix at the cached rate; switching re-reads it at
+ * the new model's full input rate (plus a cache write where the provider charges
+ * one). Returns 0 when pricing is unknown, so the gate never blocks on guesses.
+ */
+export function estimateCachePenaltyUsd(
+  contextTokens: number,
+  current: AvailableModel,
+  target: AvailableModel,
+): number {
+  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return 0;
+  const targetInput = target.cost?.input;
+  if (targetInput === undefined) return 0;
+  const coldRatePerToken = (targetInput + (target.cost?.cacheWrite ?? 0)) / 1_000_000;
+  const warmRatePerToken = (current.cost?.cacheRead ?? 0) / 1_000_000;
+  return Math.max(0, contextTokens * (coldRatePerToken - warmRatePerToken));
+}
+
+function formatTokens(tokens: number | undefined): string {
+  if (!tokens || tokens <= 0) return "empty context";
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}k tokens`;
+  return `${tokens} tokens`;
+}
+
+/** The configured route entry for a model, so a held decision can carry its thinking level. */
+function targetForModel(config: JevRouterConfig, model: AvailableModel): RouteTarget {
+  const match = (chain: readonly RouteTarget[]) =>
+    chain.find((t) => t.provider === model.provider && t.model === model.id);
+  for (const tier of TIERS) {
+    const target = match(config.routes[tier]);
+    if (target) return target;
+  }
+  for (const chain of Object.values(config.kindModels)) {
+    const target = match(chain);
+    if (target) return target;
+  }
+  return { provider: model.provider, model: model.id };
 }
 
 /**
@@ -158,6 +207,9 @@ export function decide(
   const available = firstAvailable(options.models, ordered);
   if (!available) return undefined;
 
+  const currentIndex = options.current?.index;
+  const currentModel = options.current?.model;
+
   const usedKindChain = kindChain.some(
     (t) => t.provider === available.target.provider && t.model === available.target.model,
   );
@@ -175,6 +227,59 @@ export function decide(
     notes.push(`${TIERS[index]} chain unavailable → ${TIERS[effectiveIndex]}`);
     downgraded = effectiveIndex < index;
     index = effectiveIndex;
+  }
+
+  // Cache guard: a model switch discards the provider's prompt cache, so the next
+  // request re-reads the whole prefix at full input price. Only pay that when the
+  // move is worth it — a big upgrade for a hard task, a cheaper tier once demand
+  // clears the current band, or a same-tier specialist swap that is cheap enough.
+  if (
+    config.cache.aware &&
+    currentIndex !== undefined &&
+    currentModel &&
+    (available.model.provider !== currentModel.provider || available.model.id !== currentModel.id)
+  ) {
+    const delta = index - currentIndex;
+    const penalty = estimateCachePenaltyUsd(options.contextTokens ?? 0, currentModel, available.model);
+    const outsideBand =
+      demand < currentIndex - 0.5 - config.cache.deadband ||
+      demand > currentIndex + 0.5 + config.cache.deadband;
+    const bigUpgrade = delta >= config.cache.bypassTierDelta;
+    const affordable = penalty <= config.cache.maxPenaltyUsd;
+
+    let holdReason: string | undefined;
+    if (delta === 0) {
+      // Same tier, different model: a lateral specialist swap.
+      if (!affordable) {
+        holdReason = `same-tier swap to ${available.model.id} would cost ~${formatUsd(penalty)} on ${formatTokens(options.contextTokens)} — keeping the warm cache`;
+      }
+    } else if (!outsideBand) {
+      holdReason = `demand ${demand.toFixed(2)} sits inside the ${TIERS[currentIndex]} band (±${config.cache.deadband}) — switch not worth it`;
+    } else if (!bigUpgrade && !affordable) {
+      holdReason = `cache penalty ~${formatUsd(penalty)} on ${formatTokens(options.contextTokens)} — keeping the warm cache`;
+    }
+
+    if (holdReason) {
+      notes.push(holdReason);
+      return {
+        desiredTier: TIERS[desiredIndex],
+        tier: TIERS[currentIndex],
+        target: targetForModel(config, currentModel),
+        model: currentModel,
+        tierIndex: currentIndex,
+        demandScore: demand,
+        budgetPressure: spend.pressure,
+        downgraded: false,
+        lowConfidenceFallback,
+        kindSpecialised: false,
+        held: true,
+        reason:
+          `${analysis.kind} · complexity ${analysis.complexity.toFixed(2)}/3 · ` +
+          `capability ${analysis.budgetIntensity.toFixed(2)}/3 · reasoning ${analysis.deepReasoning.toFixed(2)}` +
+          ` → ${TIERS[desiredIndex]}, held on ${TIERS[currentIndex]} to keep the cache`,
+        notes,
+      };
+    }
   }
 
   const reason =

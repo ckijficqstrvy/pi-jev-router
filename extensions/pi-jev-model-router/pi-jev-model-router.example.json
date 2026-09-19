@@ -12,6 +12,12 @@
     "softRatio": 0.7,
     "hardRatio": 0.9
   },
+  "cache": {
+    "aware": true,
+    "deadband": 0.25,
+    "maxPenaltyUsd": 0.05,
+    "bypassTierDelta": 2
+  },
   "routes": {
     "quick": [
       { "provider": "openrouter", "model": "~google/gemini-flash-latest", "thinkingLevel": "off" },
