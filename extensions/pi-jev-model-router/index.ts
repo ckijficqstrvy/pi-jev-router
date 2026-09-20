@@ -501,6 +501,16 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
         "warning",
       );
     }
+    if (runtime.config.enabled && !runtime.config.useDefaultModels) {
+      const emptyTiers = TIERS.filter((tier) => runtime.config.routes[tier].length === 0);
+      if (emptyTiers.length > 0) {
+        notify(
+          ctx,
+          `pi-jev-model-router: useDefaultModels is off and no models are configured for: ${emptyTiers.join(", ")}. Routing will skip those tiers.`,
+          "warning",
+        );
+      }
+    }
   });
 
   pi.on("session_shutdown", async () => {
@@ -667,11 +677,13 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
             `spend month: ${formatUsd(spend.month)}${spend.monthlyCap ? ` / ${formatUsd(spend.monthlyCap)}` : ""}`,
             `budget pressure: ${spend.pressure > 0 ? `${(spend.pressure * 100).toFixed(0)}%` : "no caps set"}`,
             `cache-aware: ${runtime.config.cache.aware ? `on (cap ${formatUsd(runtime.config.cache.maxPenaltyUsd)}, deadband ${runtime.config.cache.deadband})` : "off"}`,
+            `built-in models: ${runtime.config.useDefaultModels ? "on" : "off (config-only)"}`,
             `jev requests: ${runtime.ledger.jev.requests}`,
             "",
             "routes:",
             ...TIERS.map((tier) => {
               const route = runtime.config.routes[tier];
+              if (route.length === 0) return `  ✗ ${tier.padEnd(9)} (none configured)`;
               const pick = firstAvailable(runtime.models, route);
               const marker = pick ? "✓" : "✗";
               const label = pick ? `${pick.model.provider}/${pick.model.id}` : `${route[0]?.provider}/${route[0]?.model}`;
@@ -679,11 +691,11 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
               return `  ${marker} ${tier.padEnd(9)} ${label}${alts}`;
             }),
             "",
-            "kind specialists:",
+            `kind specialists (${Object.keys(runtime.config.kindModels).length}):`,
             ...Object.entries(runtime.config.kindModels).map(([kind, chain]) => {
               const pick = firstAvailable(runtime.models, chain);
               const floor = runtime.config.kindMinimumTier[kind] ?? "quick";
-              return `  ${pick ? "✓" : "✗"} ${kind.padEnd(10)} ≥${floor.padEnd(9)} ${pick ? pick.model.id : chain[0]?.model}`;
+              return `  ${pick ? "✓" : "✗"} ${kind.padEnd(10)} ≥${floor.padEnd(9)} ${pick ? pick.model.id : (chain[0]?.model ?? "(none configured)")}`;
             }),
             "",
             runtime.lastDecision ? `last: ${describeDecision(runtime.lastDecision)}` : "last: none",

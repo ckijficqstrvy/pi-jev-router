@@ -70,6 +70,12 @@ export interface CacheConfig {
 export interface JevRouterConfig {
   enabled: boolean;
   mode: Mode;
+  /**
+   * When false, the built-in model chains (`routes`, `kindModels`) are dropped
+   * entirely, so routing uses only the models your config provides. Other
+   * defaults (endpoint, timeouts, budget, kind floors) still apply.
+   */
+  useDefaultModels: boolean;
   apiKeyEnv: string;
   apiKey?: string;
   endpoint: string;
@@ -99,6 +105,7 @@ export interface JevRouterConfig {
 export const DEFAULT_CONFIG: JevRouterConfig = {
   enabled: true,
   mode: "auto",
+  useDefaultModels: true,
   apiKeyEnv: "TYPESAFE_API_KEY",
   endpoint: "https://api.typesafe.ai/v1/systemone",
   jevModel: "jev-latest",
@@ -111,7 +118,8 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
   routes: {
     quick: [
       { provider: "openrouter", model: "~google/gemini-flash-latest", thinkingLevel: "off" },
-      { provider: "openrouter", model: "~openai/gpt-mini-latest", thinkingLevel: "off" },
+      { provider: "openrouter", model: "~openai/gpt-luna-latest", thinkingLevel: "off" },
+      { provider: "openrouter", model: "~z-ai/glm-flash-latest", thinkingLevel: "off" },
       { provider: "openrouter", model: "~deepseek/deepseek-v4-flash-latest", thinkingLevel: "off" },
     ],
     standard: [
@@ -121,37 +129,38 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
     ],
     high: [
       { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", thinkingLevel: "medium" },
-      { provider: "openrouter", model: "openai/gpt-5.5", thinkingLevel: "medium" },
+      { provider: "openrouter", model: "~openai/gpt-terra-latest", thinkingLevel: "medium" },
       { provider: "openrouter", model: "~google/gemini-pro-latest", thinkingLevel: "medium" },
+      { provider: "openrouter", model: "~x-ai/grok-latest", thinkingLevel: "medium" },
     ],
     premium: [
       { provider: "openrouter", model: "~anthropic/claude-opus-latest", thinkingLevel: "high" },
-      { provider: "openrouter", model: "openai/gpt-5.5-pro", thinkingLevel: "high" },
-      { provider: "openrouter", model: "openai/gpt-5.4-pro", thinkingLevel: "high" },
+      { provider: "openrouter", model: "openai/gpt-5.5", thinkingLevel: "high" },
+      { provider: "openrouter", model: "~openai/gpt-astra-latest", thinkingLevel: "high" },
     ],
   },
   kindModels: {
     // Planning and design: strong long-horizon reasoners.
     plan: [
-      { provider: "openrouter", model: "openai/gpt-5.5", minTier: "high" },
       { provider: "openrouter", model: "~anthropic/claude-opus-latest", minTier: "premium" },
-      { provider: "openrouter", model: "openai/gpt-5.4-pro", minTier: "premium" },
-      { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "standard" },
+      { provider: "openrouter", model: "~openai/gpt-astra-latest", minTier: "premium" },
+      { provider: "openrouter", model: "~openai/gpt-terra-latest", minTier: "high" },
+      { provider: "openrouter", model: "~google/gemini-pro-latest", minTier: "standard" },
     ],
     // Implementation: coding specialists.
     implement: [
       { provider: "openrouter", model: "openai/gpt-5.3-codex", minTier: "standard" },
-      { provider: "openrouter", model: "openai/gpt-5.2-codex", minTier: "standard" },
+      { provider: "openrouter", model: "moonshotai/kimi-k2.7-code", minTier: "standard" },
       { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "standard" },
     ],
     debug: [
       { provider: "openrouter", model: "openai/gpt-5.3-codex", minTier: "standard" },
-      { provider: "openrouter", model: "openai/gpt-5.5", minTier: "high" },
+      { provider: "openrouter", model: "~openai/gpt-terra-latest", minTier: "high" },
       { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "standard" },
     ],
     refactor: [
       { provider: "openrouter", model: "openai/gpt-5.3-codex", minTier: "standard" },
-      { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "standard" },
+      { provider: "openrouter", model: "moonshotai/kimi-k2.7-code", minTier: "standard" },
     ],
     // Review and audit: strongest reviewers only.
     review: [
@@ -162,19 +171,22 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
     // Research: long-context readers.
     research: [
       { provider: "openrouter", model: "~google/gemini-pro-latest", minTier: "standard" },
-      { provider: "openrouter", model: "openai/gpt-5.4", minTier: "standard" },
+      { provider: "openrouter", model: "moonshotai/kimi-k3", minTier: "standard" },
+      { provider: "openrouter", model: "~openai/gpt-terra-latest", minTier: "standard" },
     ],
     explain: [
       { provider: "openrouter", model: "~google/gemini-flash-latest", minTier: "quick" },
       { provider: "openrouter", model: "openai/gpt-5.4-mini", minTier: "quick" },
+      { provider: "openrouter", model: "~google/gemini-pro-latest", minTier: "standard" },
     ],
     operate: [
-      { provider: "openrouter", model: "openai/gpt-5.2", minTier: "standard" },
+      { provider: "openrouter", model: "openai/gpt-5.4-mini", minTier: "standard" },
       { provider: "openrouter", model: "~deepseek/deepseek-pro-latest", minTier: "standard" },
     ],
     chat: [
       { provider: "openrouter", model: "~google/gemini-flash-latest", minTier: "quick" },
-      { provider: "openrouter", model: "~openai/gpt-mini-latest", minTier: "quick" },
+      { provider: "openrouter", model: "~openai/gpt-luna-latest", minTier: "quick" },
+      { provider: "openrouter", model: "~z-ai/glm-flash-latest", minTier: "quick" },
     ],
     write: [
       { provider: "openrouter", model: "~google/gemini-flash-latest", minTier: "quick" },
@@ -268,11 +280,23 @@ export function configPaths(cwd?: string): { global: string; project?: string } 
 
 export function loadConfig(cwd?: string): JevRouterConfig {
   const paths = configPaths(cwd);
-  let config = merge(DEFAULT_CONFIG, readJson(paths.global));
-  if (paths.project) {
-    const projectPatch = readJson(paths.project);
-    if (projectPatch) config = merge(config, projectPatch);
-  }
+  const globalPatch = readJson(paths.global);
+  const projectPatch = paths.project ? readJson(paths.project) : undefined;
+
+  // `useDefaultModels: false` means "bring your own models": start from empty
+  // chains so the built-ins are not available as a base or as fallback.
+  // The last source that sets it wins.
+  const explicit = [globalPatch, projectPatch]
+    .map((patch) => asRecord(patch).useDefaultModels)
+    .filter((value): value is boolean => typeof value === "boolean");
+  const useDefaults = explicit.length > 0 ? explicit[explicit.length - 1] : DEFAULT_CONFIG.useDefaultModels;
+
+  let config = useDefaults
+    ? { ...DEFAULT_CONFIG }
+    : { ...DEFAULT_CONFIG, routes: emptyChains(), kindModels: {} };
+
+  if (globalPatch) config = merge(config, globalPatch);
+  if (projectPatch) config = merge(config, projectPatch);
 
   if (process.env.JEV_ROUTER_MODE) {
     const mode = process.env.JEV_ROUTER_MODE.toLowerCase();
@@ -282,6 +306,10 @@ export function loadConfig(cwd?: string): JevRouterConfig {
     config.enabled = false;
   }
   return config;
+}
+
+function emptyChains(): Record<Tier, RouteChain> {
+  return { quick: [], standard: [], high: [], premium: [] };
 }
 
 export function hasApiKey(config: JevRouterConfig): boolean {

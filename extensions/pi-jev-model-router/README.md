@@ -177,6 +177,9 @@ as an error.
 
 ## Tuning notes
 
+- `useDefaultModels: false` drops the built-in `routes`/`kindModels` entirely, so
+  only the models in your config are used. Tiers or kinds you don't configure
+  become empty and are skipped, never back-filled from the defaults.
 - A model switch resets the provider prompt cache. `cache.aware` (default on)
   gates switches by their estimated cache penalty, so tune `cache.maxPenaltyUsd`
   down for more switching, or up for more stickiness. `cache.aware: false`

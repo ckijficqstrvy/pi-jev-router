@@ -71,7 +71,7 @@ pi install npm:pi-jev-model-router
 From a pinned git ref:
 
 ```bash
-pi install git:github.com/da-vinci-noob/pi-jev-model-router@v0.2.0
+pi install git:github.com/da-vinci-noob/pi-jev-model-router@v0.3.0
 ```
 
 From a local checkout:
@@ -165,21 +165,29 @@ single provider id. Four capability tiers, each an ordered fallback chain:
 
 | Tier | Order tried |
 | --- | --- |
-| `quick` | `~google/gemini-flash-latest` → `~openai/gpt-mini-latest` → `~deepseek/deepseek-v4-flash-latest` |
+| `quick` | `~google/gemini-flash-latest` → `~openai/gpt-luna-latest` → `~z-ai/glm-flash-latest` → `~deepseek/deepseek-v4-flash-latest` |
 | `standard` | `~deepseek/deepseek-pro-latest` → `openai/gpt-5.4-mini` → `~z-ai/glm-latest` |
-| `high` | `~anthropic/claude-sonnet-latest` → `openai/gpt-5.5` → `~google/gemini-pro-latest` |
-| `premium` | `~anthropic/claude-opus-latest` → `openai/gpt-5.5-pro` → `openai/gpt-5.4-pro` |
+| `high` | `~anthropic/claude-sonnet-latest` → `~openai/gpt-terra-latest` → `~google/gemini-pro-latest` → `~x-ai/grok-latest` |
+| `premium` | `~anthropic/claude-opus-latest` → `openai/gpt-5.5` → `~openai/gpt-astra-latest` |
 
 Plus kind specialists, tried before the tier chain when the chosen tier is high
 enough (`minTier`):
 
 | Kind | Specialists |
 | --- | --- |
-| `plan` | `openai/gpt-5.5` (≥high) → `~anthropic/claude-opus-latest` (≥premium) |
-| `implement` / `debug` / `refactor` | `openai/gpt-5.3-codex` (≥standard) → `openai/gpt-5.2-codex` |
-| `review` | `~anthropic/claude-opus-latest` (≥high) → `openai/gpt-5.5` (≥high) |
-| `research` | `~google/gemini-pro-latest` (≥standard) |
-| `explain` / `chat` / `write` | `~google/gemini-flash-latest`, `openai/gpt-5.4-mini` |
+| `plan` | `~anthropic/claude-opus-latest` (≥premium) → `~openai/gpt-astra-latest` (≥premium) → `~openai/gpt-terra-latest` (≥high) → `~google/gemini-pro-latest` (≥standard) |
+| `implement` | `openai/gpt-5.3-codex` (≥standard) → `moonshotai/kimi-k2.7-code` → `~anthropic/claude-sonnet-latest` |
+| `debug` | `openai/gpt-5.3-codex` (≥standard) → `~openai/gpt-terra-latest` (≥high) → `~anthropic/claude-sonnet-latest` |
+| `refactor` | `openai/gpt-5.3-codex` (≥standard) → `moonshotai/kimi-k2.7-code` |
+| `review` | `~anthropic/claude-opus-latest` (≥high) → `openai/gpt-5.5` (≥high) → `~anthropic/claude-sonnet-latest` |
+| `research` | `~google/gemini-pro-latest` (≥standard) → `moonshotai/kimi-k3` → `~openai/gpt-terra-latest` |
+| `explain` | `~google/gemini-flash-latest` (≥quick) → `openai/gpt-5.4-mini` → `~google/gemini-pro-latest` (≥standard) |
+| `operate` | `openai/gpt-5.4-mini` (≥standard) → `~deepseek/deepseek-pro-latest` |
+| `chat` | `~google/gemini-flash-latest` → `~openai/gpt-luna-latest` → `~z-ai/glm-flash-latest` |
+| `write` | `~google/gemini-flash-latest` (≥quick) → `openai/gpt-5.4-mini` → `~anthropic/claude-sonnet-latest` (≥standard) |
+
+Provider-maintained `~...-latest` aliases are used wherever they exist, so the
+chains follow new model releases instead of going stale.
 
 Run `/jev-router` to see this for your own setup, with a `✓`/`✗` per route
 showing what is actually available and authenticated.
@@ -189,6 +197,37 @@ showing what is actually available and authenticated.
 The router is provider-agnostic: it only references models that pi already knows
 about, so **if pi can use a model, the router can route to it.** You are never
 limited to OpenRouter — the defaults are just a convenient starting point.
+
+### 0. Drop the built-in models entirely (optional)
+
+By default your config is *merged over* the built-in chains, so a tier you don't
+mention keeps its defaults. If you'd rather start from nothing and use only your
+own models, set:
+
+```json
+{
+  "useDefaultModels": false,
+  "routes": {
+    "quick": [{ "provider": "openrouter", "model": "~z-ai/glm-flash-latest" }],
+    "high":  [{ "provider": "anthropic", "model": "claude-sonnet-4-5" }]
+  },
+  "kindModels": {
+    "implement": [{ "provider": "openrouter", "model": "moonshotai/kimi-k2.7-code", "minTier": "standard" }]
+  }
+}
+```
+
+With `useDefaultModels: false`:
+
+- the built-in `routes` and `kindModels` are **gone** — not available as a base
+  or as fallback;
+- tiers or kinds you don't configure are **empty**, and the router simply skips
+  them (it never invents a model);
+- everything that isn't a model list still applies — `endpoint`, timeouts,
+  `budget`, `cache`, and the `kindMinimumTier` floors.
+
+`/jev-router` prints `built-in models: off (config-only)` and marks empty tiers
+as `(none configured)`. If a tier you need is empty, pi warns on session start.
 
 ### 1. Find the model ids pi knows
 
@@ -379,6 +418,7 @@ entirely when a model's pricing is unknown, so it never blocks on guesses. Set
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `enabled` | `true` | Master switch |
+| `useDefaultModels` | `true` | `false` drops the built-in model chains so only your config's models are used |
 | `mode` | `"auto"` | `auto` \| `confirm` \| `notify` |
 | `apiKeyEnv` / `apiKey` | `TYPESAFE_API_KEY` | TypeSafe credentials |
 | `endpoint` | `https://api.typesafe.ai/v1/systemone` | Evaluation endpoint |
