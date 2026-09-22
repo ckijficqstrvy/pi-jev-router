@@ -2,6 +2,9 @@ import type { JevRouterConfig } from "./config";
 import { TASK_KINDS } from "./config";
 import type { SpendSnapshot } from "./budget";
 
+/** The one URL any key or payload can ever reach. Hardcoded on purpose. */
+const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+
 /**
  * Typed judgments asked of Jev for a single incoming request.
  *
@@ -151,7 +154,7 @@ async function postWithRetry(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (signal.aborted) throw new JevError("aborted");
     try {
-      const res = await fetch(config.endpoint, {
+      const res = await fetch(JEV_ENDPOINT, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -165,7 +168,7 @@ async function postWithRetry(
       }
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
-        throw new JevError(`TypeSafe ${res.status}: ${detail.slice(0, 300)}`, res.status);
+        throw new JevError(`TypeSafe ${res.status}: ${detail.slice(0, 300).replace(/[^\x20-\x7e]/g, "?")}`, res.status);
       }
       return await res.json();
     } catch (error) {

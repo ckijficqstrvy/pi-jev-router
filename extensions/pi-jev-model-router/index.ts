@@ -12,7 +12,7 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { apiKeyFor, hasApiKey, loadConfig, TIERS, type JevRouterConfig } from "./config";
+import { apiKeySourceLabel, loadConfig, resolveApiKey, STATE_FILE, TIERS, type JevRouterConfig } from "./config";
 import {
   formatUsd,
   loadLedger,
@@ -255,8 +255,9 @@ async function analyse(
   runtime: Runtime,
 ): Promise<{ analysis: RouteAnalysis; decision?: Decision } | { error: string }> {
   const config = runtime.config;
-  if (!hasApiKey(config)) {
-    return { error: `missing API key (env ${config.apiKeyEnv})` };
+  const cred = resolveApiKey();
+  if (!cred) {
+    return { error: "missing API key (set TYPESAFE_API_KEY or run /typesafe login)" };
   }
   if (runtime.models.length === 0) runtime.models = toAvailable(ctx);
   const spend = spendSnapshot(runtime.ledger, config.budget);
@@ -268,18 +269,17 @@ async function analyse(
     {
       prompt,
       history: historyExcerpt(ctx, config.historyTurns),
-      cwd: ctx.cwd,
       activeModel: activeKey,
       contextTokens,
       spend,
     },
     config,
-    apiKeyFor(config),
+    cred.key,
     ctx.signal,
   );
 
   if (analysis.usage) recordJevUsage(runtime.ledger, analysis.usage.input_tokens, analysis.usage.output_tokens);
-  saveLedger(config.stateFile, runtime.ledger);
+  saveLedger(STATE_FILE, runtime.ledger);
   const decision = decide(analysis, config, {
     models: runtime.models,
     spend,
@@ -431,7 +431,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
 
   const runtime: Runtime = {
     config: loadConfig(),
-    ledger: loadLedger(loadConfig().stateFile),
+    ledger: loadLedger(STATE_FILE),
     models: [],
   };
 
@@ -490,14 +490,14 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    runtime.config = loadConfig(ctx.cwd);
-    runtime.ledger = loadLedger(runtime.config.stateFile);
+    runtime.config = loadConfig();
+    runtime.ledger = loadLedger(STATE_FILE);
     runtime.models = toAvailable(ctx);
     runtime.appliedTierIndex = tierForModel(currentModelKey(ctx), runtime.config);
     statusLine(ctx, runtime);
-    if (runtime.config.enabled && !hasApiKey(runtime.config)) {
+    if (runtime.config.enabled && !resolveApiKey()) {
       notify(ctx, 
-        `pi-jev-model-router: no API key. Set ${runtime.config.apiKeyEnv} or add "apiKey" to ~/.pi/agent/pi-jev-model-router.json.`,
+        "pi-jev-model-router: no API key. Set TYPESAFE_API_KEY or run /typesafe login.",
         "warning",
       );
     }
@@ -514,7 +514,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
   });
 
   pi.on("session_shutdown", async () => {
-    saveLedger(runtime.config.stateFile, runtime.ledger);
+    saveLedger(STATE_FILE, runtime.ledger);
   });
 
   pi.on("model_select", async (_event, ctx) => {
@@ -536,7 +536,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     const key = message.provider && message.model ? `${message.provider}/${message.model}` : "unknown";
     if (typeof cost === "number" && cost > 0) {
       recordCost(runtime.ledger, key, cost);
-      saveLedger(runtime.config.stateFile, runtime.ledger);
+      saveLedger(STATE_FILE, runtime.ledger);
     }
   });
 
@@ -619,7 +619,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
             return;
           }
           statusLine(ctx, runtime);
-          notify(ctx, `budget ${rest[0]} cap: ${formatUsd(amount)} (session only — persist in pi-jev-model-router.json)`, "info");
+          notify(ctx, `budget ${rest[0]} cap: ${formatUsd(amount)} (session only — persist in ~/.pi/agent/pi-jev-model-router.json)`, "info");
           return;
         }
         case "revert": {
@@ -667,11 +667,12 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
         case "status":
         default: {
           const spend = spendSnapshot(runtime.ledger, runtime.config.budget);
+          const cred = resolveApiKey();
           const lines = [
             `enabled: ${runtime.config.enabled}`,
             `mode: ${runtime.config.mode}`,
             `jev model: ${runtime.config.jevModel}`,
-            `api key: ${hasApiKey(runtime.config) ? `${runtime.config.apiKeyEnv} ✓` : "missing"}`,
+            `api key: ${cred ? `${apiKeySourceLabel(cred.source)} ✓` : "missing"}`,
             `current model: ${currentModelKey(ctx) ?? "unknown"}`,
             `spend today: ${formatUsd(spend.today)}${spend.dailyCap ? ` / ${formatUsd(spend.dailyCap)}` : ""}`,
             `spend month: ${formatUsd(spend.month)}${spend.monthlyCap ? ` / ${formatUsd(spend.monthlyCap)}` : ""}`,

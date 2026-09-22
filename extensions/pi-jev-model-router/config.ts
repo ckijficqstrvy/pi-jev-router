@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
@@ -9,9 +9,13 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
  * Resolution order (later wins):
  *   1. DEFAULTS below
  *   2. ~/.pi/agent/pi-jev-model-router.json
- *   3. <cwd>/.pi/pi-jev-model-router.json   (only in a trusted project)
- *   4. env: TYPESAFE_API_KEY / JEV_ROUTER_MODE / JEV_ROUTER_OFF
+ *   3. env: TYPESAFE_API_KEY / JEV_ROUTER_MODE / JEV_ROUTER_OFF
  */
+
+/** Fixed spend-ledger path: single owner, not configurable, never a config key. */
+export const STATE_FILE = join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router-state.json");
+/** The only environment variable the router may read a key from. */
+export const API_KEY_ENV = "TYPESAFE_API_KEY";
 
 export type Tier = "quick" | "standard" | "high" | "premium";
 export const TIERS: readonly Tier[] = ["quick", "standard", "high", "premium"] as const;
@@ -73,12 +77,9 @@ export interface JevRouterConfig {
   /**
    * When false, the built-in model chains (`routes`, `kindModels`) are dropped
    * entirely, so routing uses only the models your config provides. Other
-   * defaults (endpoint, timeouts, budget, kind floors) still apply.
+   * defaults (timeouts, budget, kind floors) still apply.
    */
   useDefaultModels: boolean;
-  apiKeyEnv: string;
-  apiKey?: string;
-  endpoint: string;
   jevModel: string;
   timeoutMs: number;
   minPromptChars: number;
@@ -88,7 +89,6 @@ export interface JevRouterConfig {
   confidenceThreshold: number;
   /** Don't switch models when the current model already sits on the chosen tier. */
   stickiness: boolean;
-  stateFile: string;
   routes: Record<Tier, RouteChain>;
   /**
    * Kind-specific model preferences. When a kind has a chain here, models are
@@ -106,15 +106,12 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
   enabled: true,
   mode: "auto",
   useDefaultModels: true,
-  apiKeyEnv: "TYPESAFE_API_KEY",
-  endpoint: "https://api.typesafe.ai/v1/systemone",
   jevModel: "jev-latest",
   timeoutMs: 3500,
   minPromptChars: 12,
   historyTurns: 4,
   confidenceThreshold: 0.34,
   stickiness: true,
-  stateFile: join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router-state.json"),
   routes: {
     quick: [
       { provider: "openrouter", model: "~google/gemini-flash-latest", thinkingLevel: "off" },
@@ -245,58 +242,95 @@ function normalizeChain(value: unknown): RouteChain | undefined {
 
 function merge(base: JevRouterConfig, patch: unknown): JevRouterConfig {
   const p = asRecord(patch);
+  // Explicit whitelist copy: keys the interface does not declare are dropped
+  // on the floor, never spread back in.
+  const next: JevRouterConfig = { ...base };
+
+  if (typeof p.enabled === "boolean") next.enabled = p.enabled;
+  const mode = p.mode;
+  if (mode === "auto" || mode === "confirm" || mode === "notify") next.mode = mode;
+  if (typeof p.useDefaultModels === "boolean") next.useDefaultModels = p.useDefaultModels;
+  if (typeof p.jevModel === "string") next.jevModel = p.jevModel;
+  if (typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)) next.timeoutMs = p.timeoutMs;
+  if (typeof p.minPromptChars === "number" && Number.isFinite(p.minPromptChars)) {
+    next.minPromptChars = p.minPromptChars;
+  }
+  if (typeof p.historyTurns === "number" && Number.isFinite(p.historyTurns)) next.historyTurns = p.historyTurns;
+  if (typeof p.confidenceThreshold === "number" && Number.isFinite(p.confidenceThreshold)) {
+    next.confidenceThreshold = p.confidenceThreshold;
+  }
+  if (typeof p.stickiness === "boolean") next.stickiness = p.stickiness;
+
   const routes = { ...base.routes };
   const rawRoutes = asRecord(p.routes);
   for (const tier of TIERS) {
     const chain = normalizeChain(rawRoutes[tier]);
     if (chain) routes[tier] = chain;
   }
+  next.routes = routes;
+
   const kindModels = { ...base.kindModels };
   for (const [kind, value] of Object.entries(asRecord(p.kindModels))) {
     const chain = normalizeChain(value);
     if (chain) kindModels[kind] = chain;
   }
-  return {
-    ...base,
-    ...(p as Partial<JevRouterConfig>),
-    routes,
-    kindModels,
-    budget: { ...base.budget, ...asRecord(p.budget) } as BudgetConfig,
-    cache: { ...base.cache, ...asRecord(p.cache) } as CacheConfig,
-    kindMinimumTier: {
-      ...base.kindMinimumTier,
-      ...(asRecord(p.kindMinimumTier) as Record<string, Tier>),
-    },
-  };
+  next.kindModels = kindModels;
+
+  const kindMinimumTier = { ...base.kindMinimumTier };
+  for (const [kind, value] of Object.entries(asRecord(p.kindMinimumTier))) {
+    if (typeof value === "string" && (TIERS as readonly string[]).includes(value)) {
+      kindMinimumTier[kind] = value as Tier;
+    }
+  }
+  next.kindMinimumTier = kindMinimumTier;
+
+  const budgetRaw = asRecord(p.budget);
+  const budget = { ...base.budget };
+  if (typeof budgetRaw.dailyUsd === "number" && Number.isFinite(budgetRaw.dailyUsd)) {
+    budget.dailyUsd = budgetRaw.dailyUsd;
+  }
+  if (typeof budgetRaw.monthlyUsd === "number" && Number.isFinite(budgetRaw.monthlyUsd)) {
+    budget.monthlyUsd = budgetRaw.monthlyUsd;
+  }
+  if (typeof budgetRaw.softRatio === "number" && Number.isFinite(budgetRaw.softRatio)) {
+    budget.softRatio = budgetRaw.softRatio;
+  }
+  if (typeof budgetRaw.hardRatio === "number" && Number.isFinite(budgetRaw.hardRatio)) {
+    budget.hardRatio = budgetRaw.hardRatio;
+  }
+  next.budget = budget;
+
+  const cacheRaw = asRecord(p.cache);
+  const cache = { ...base.cache };
+  if (typeof cacheRaw.aware === "boolean") cache.aware = cacheRaw.aware;
+  if (typeof cacheRaw.deadband === "number" && Number.isFinite(cacheRaw.deadband)) {
+    cache.deadband = cacheRaw.deadband;
+  }
+  if (typeof cacheRaw.maxPenaltyUsd === "number" && Number.isFinite(cacheRaw.maxPenaltyUsd)) {
+    cache.maxPenaltyUsd = cacheRaw.maxPenaltyUsd;
+  }
+  if (typeof cacheRaw.bypassTierDelta === "number" && Number.isFinite(cacheRaw.bypassTierDelta)) {
+    cache.bypassTierDelta = cacheRaw.bypassTierDelta;
+  }
+  next.cache = cache;
+
+  return next;
 }
 
-export function configPaths(cwd?: string): { global: string; project?: string } {
-  const global = join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router.json");
-  return {
-    global,
-    project: cwd ? join(cwd, CONFIG_DIR_NAME, "pi-jev-model-router.json") : undefined,
-  };
-}
-
-export function loadConfig(cwd?: string): JevRouterConfig {
-  const paths = configPaths(cwd);
-  const globalPatch = readJson(paths.global);
-  const projectPatch = paths.project ? readJson(paths.project) : undefined;
+export function loadConfig(): JevRouterConfig {
+  const globalPatch = readJson(join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router.json"));
 
   // `useDefaultModels: false` means "bring your own models": start from empty
   // chains so the built-ins are not available as a base or as fallback.
-  // The last source that sets it wins.
-  const explicit = [globalPatch, projectPatch]
-    .map((patch) => asRecord(patch).useDefaultModels)
-    .filter((value): value is boolean => typeof value === "boolean");
-  const useDefaults = explicit.length > 0 ? explicit[explicit.length - 1] : DEFAULT_CONFIG.useDefaultModels;
+  const globalUseDefaultModels = asRecord(globalPatch).useDefaultModels;
+  const useDefaults =
+    typeof globalUseDefaultModels === "boolean" ? globalUseDefaultModels : DEFAULT_CONFIG.useDefaultModels;
 
   let config = useDefaults
     ? { ...DEFAULT_CONFIG }
     : { ...DEFAULT_CONFIG, routes: emptyChains(), kindModels: {} };
 
   if (globalPatch) config = merge(config, globalPatch);
-  if (projectPatch) config = merge(config, projectPatch);
 
   if (process.env.JEV_ROUTER_MODE) {
     const mode = process.env.JEV_ROUTER_MODE.toLowerCase();
@@ -312,14 +346,51 @@ function emptyChains(): Record<Tier, RouteChain> {
   return { quick: [], standard: [], high: [], premium: [] };
 }
 
-export function hasApiKey(config: JevRouterConfig): boolean {
-  if (config.apiKey && config.apiKey.trim().length > 0) return true;
-  const value = process.env[config.apiKeyEnv];
-  return typeof value === "string" && value.trim().length > 0;
+export interface ApiKeyResolution {
+  key: string;
+  source: "environment" | "stored";
 }
 
-export function apiKeyFor(config: JevRouterConfig): string {
-  return config.apiKey?.trim() || process.env[config.apiKeyEnv]?.trim() || "";
+/**
+ * Read the key pi-typesafe stored at `<agentDir>/pi-typesafe/auth.json`
+ * (`agentDir` = `PI_CODING_AGENT_DIR` or `~/.pi/agent`). Rejected unless the
+ * file is private (mode `& 0o077 === 0` off Windows) and the token is 16–512
+ * visible ASCII characters with no whitespace — pi-typesafe's own rules.
+ * Never logged; failure yields "no key", never a fallback value.
+ */
+function readStoredApiKey(): string | undefined {
+  const configuredDir = process.env.PI_CODING_AGENT_DIR;
+  const agentDir =
+    typeof configuredDir === "string" && configuredDir.trim()
+      ? configuredDir
+      : join(homedir(), CONFIG_DIR_NAME, "agent");
+  try {
+    const file = join(agentDir, "pi-typesafe", "auth.json");
+    if (process.platform !== "win32" && (statSync(file).mode & 0o077) !== 0) return undefined;
+    const token = asRecord(JSON.parse(readFileSync(file, "utf8"))).apiKey;
+    if (typeof token !== "string" || token.length < 16 || token.length > 512) return undefined;
+    if (!/^[\x21-\x7e]+$/.test(token)) return undefined;
+    return token;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Key resolution (env-first, stored file as fallback — the same order
+ * pi-typesafe uses). Returns undefined when neither source yields a key.
+ */
+export function resolveApiKey(): ApiKeyResolution | undefined {
+  const env = process.env[API_KEY_ENV]?.trim();
+  if (env) return { key: env, source: "environment" };
+  const stored = readStoredApiKey();
+  if (stored) return { key: stored, source: "stored" };
+  return undefined;
+}
+
+/** Human-readable key-source label for status output. Never returns a key value. */
+export function apiKeySourceLabel(source: "environment" | "stored"): string {
+  return source === "environment" ? API_KEY_ENV : "/typesafe login";
 }
 
 export const TASK_KINDS: Record<string, string> = {
