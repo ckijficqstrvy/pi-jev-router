@@ -170,7 +170,15 @@ async function postWithRetry(
       // fetch()/res.json() failures can carry response bytes in their message.
       // Wash only that text: error class, status, retry and fail-open handling below are untouched.
       if (error instanceof Error && !(error instanceof JevError)) {
-        error.message = sanitizeRemote(error.message);
+        // DOMException (timeout/abort) has a readonly `message` accessor, so
+        // assignment throws in strict mode. Wash is best-effort; keep the rest
+        // of the retry/fail-open flow untouched either way.
+        try {
+          error.message = sanitizeRemote(error.message);
+        } catch {
+          // readonly message: leave the original text (fixed strings only for
+          // abort/timeouts, which the /abort/i suppression already handles).
+        }
       }
       lastError = error;
       if (error instanceof JevError && error.status !== 429 && error.status !== 529) throw error;
