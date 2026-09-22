@@ -100,8 +100,11 @@ pi remove npm:pi-jev-model-router
 export TYPESAFE_API_KEY=...
 ```
 
-Add it to your shell profile to persist it. You can also set `apiKey` directly in
-the config file (see below).
+Add it to your shell profile to persist it, or run `/typesafe login`:
+pi-typesafe then stores the key in `~/.pi/agent/pi-typesafe/auth.json`, which
+this router reads as the fallback source. That file must be private
+(`chmod 600`, mode `0600`) — the router refuses to read it while group or
+other permission bits are set. There is no config key for the API key.
 
 ### 4. Use it
 
@@ -123,7 +126,7 @@ disabled. No configuration is required — sensible defaults are built in.
 | `/jev-router` | Status: mode, spend, tier chains, kind specialists, last decision |
 | `/jev-router on` / `off` | Enable/disable routing |
 | `/jev-router mode auto\|confirm\|notify` | `auto` switches silently; `confirm` asks each turn; `notify` only tells you |
-| `/jev-router budget daily 10` | Session-only daily cap (persist it in the config file) |
+| `/jev-router budget daily 10` | Session-only daily cap (persist it in `~/.pi/agent/pi-jev-model-router.json`) |
 | `/jev-router budget monthly 150` | Session-only monthly cap |
 | `/jev-router why` | Re-run Jev on the last prompt and show the full judgment + decision trace |
 | `/jev-router revert` | Switch back to the model that was active before the last auto-switch |
@@ -163,31 +166,36 @@ using openrouter/~anthropic/claude-opus-latest
 The defaults target **OpenRouter**, because it exposes a large catalogue through a
 single provider id. Four capability tiers, each an ordered fallback chain:
 
-| Tier | Order tried |
-| --- | --- |
-| `quick` | `~google/gemini-flash-latest` → `~openai/gpt-luna-latest` → `~z-ai/glm-flash-latest` → `~deepseek/deepseek-v4-flash-latest` |
-| `standard` | `~deepseek/deepseek-pro-latest` → `openai/gpt-5.4-mini` → `~z-ai/glm-latest` |
-| `high` | `~anthropic/claude-sonnet-latest` → `~openai/gpt-terra-latest` → `~google/gemini-pro-latest` → `~x-ai/grok-latest` |
-| `premium` | `~anthropic/claude-opus-latest` → `openai/gpt-5.5` → `~openai/gpt-astra-latest` |
+| Tier | Order tried | thinkingLevel |
+| --- | --- | --- |
+| `quick` | `xiaomi/mimo-v2.6-flash` | `off` |
+| `standard` | `xiaomi/mimo-v2.6-pro` | `low` |
+| `high` | `~anthropic/claude-sonnet-latest` | `medium` |
+| `premium` | `~anthropic/claude-opus-latest` | `high` |
 
 Plus kind specialists, tried before the tier chain when the chosen tier is high
 enough (`minTier`):
 
 | Kind | Specialists |
 | --- | --- |
-| `plan` | `~anthropic/claude-opus-latest` (≥premium) → `~openai/gpt-astra-latest` (≥premium) → `~openai/gpt-terra-latest` (≥high) → `~google/gemini-pro-latest` (≥standard) |
-| `implement` | `openai/gpt-5.3-codex` (≥standard) → `moonshotai/kimi-k2.7-code` → `~anthropic/claude-sonnet-latest` |
-| `debug` | `openai/gpt-5.3-codex` (≥standard) → `~openai/gpt-terra-latest` (≥high) → `~anthropic/claude-sonnet-latest` |
-| `refactor` | `openai/gpt-5.3-codex` (≥standard) → `moonshotai/kimi-k2.7-code` |
-| `review` | `~anthropic/claude-opus-latest` (≥high) → `openai/gpt-5.5` (≥high) → `~anthropic/claude-sonnet-latest` |
-| `research` | `~google/gemini-pro-latest` (≥standard) → `moonshotai/kimi-k3` → `~openai/gpt-terra-latest` |
-| `explain` | `~google/gemini-flash-latest` (≥quick) → `openai/gpt-5.4-mini` → `~google/gemini-pro-latest` (≥standard) |
-| `operate` | `openai/gpt-5.4-mini` (≥standard) → `~deepseek/deepseek-pro-latest` |
-| `chat` | `~google/gemini-flash-latest` → `~openai/gpt-luna-latest` → `~z-ai/glm-flash-latest` |
-| `write` | `~google/gemini-flash-latest` (≥quick) → `openai/gpt-5.4-mini` → `~anthropic/claude-sonnet-latest` (≥standard) |
+| `plan` | `~anthropic/claude-opus-latest` (≥premium) → `~anthropic/claude-sonnet-latest` (≥high) |
+| `implement` | `xiaomi/mimo-v2.6-pro` (≥standard) → `~anthropic/claude-sonnet-latest` (≥standard) |
+| `debug` | `xiaomi/mimo-v2.6-pro` (≥standard) → `~anthropic/claude-sonnet-latest` (≥high) |
+| `refactor` | `xiaomi/mimo-v2.6-pro` (≥standard) |
+| `review` | `~anthropic/claude-opus-latest` (≥high) → `~anthropic/claude-sonnet-latest` (≥standard) |
+| `research` | `~anthropic/claude-sonnet-latest` (≥standard) → `xiaomi/mimo-v2.6-pro` (≥standard) |
+| `explain` | `xiaomi/mimo-v2.6-flash` (≥quick) → `xiaomi/mimo-v2.6-pro` (≥standard) |
+| `operate` | `xiaomi/mimo-v2.6-pro` (≥standard) |
+| `chat` | `xiaomi/mimo-v2.6-flash` (≥quick) |
+| `write` | `~anthropic/claude-sonnet-latest` (≥standard) → `xiaomi/mimo-v2.6-pro` (≥standard) |
 
 Provider-maintained `~...-latest` aliases are used wherever they exist, so the
 chains follow new model releases instead of going stale.
+
+**Maintenance note:** `xiaomi/mimo-v2.6-*` are fixed slugs with no `~latest`
+alias. When upstream retires them, routing leans on the adjacent-tier fallback
+in `decide()`; re-check with `pi --list-models` once per maintenance cycle and
+refresh the slugs if they are gone.
 
 Run `/jev-router` to see this for your own setup, with a `✓`/`✗` per route
 showing what is actually available and authenticated.
@@ -223,8 +231,8 @@ With `useDefaultModels: false`:
   or as fallback;
 - tiers or kinds you don't configure are **empty**, and the router simply skips
   them (it never invents a model);
-- everything that isn't a model list still applies — `endpoint`, timeouts,
-  `budget`, `cache`, and the `kindMinimumTier` floors.
+- everything that isn't a model list still applies — timeouts, `budget`,
+  `cache`, and the `kindMinimumTier` floors.
 
 `/jev-router` prints `built-in models: off (config-only)` and marks empty tiers
 as `(none configured)`. If a tier you need is empty, pi warns on session start.
@@ -247,8 +255,9 @@ are exactly the two fields the config uses.
 
 ### 2. Point the tiers at your models
 
-Create `~/.pi/agent/pi-jev-model-router.json` (or `<project>/.pi/pi-jev-model-router.json`).
-Anything you set is merged over the defaults, per tier.
+Create `~/.pi/agent/pi-jev-model-router.json` (the only config file —
+project-level configs are not read). Anything you set is merged over the
+defaults, per tier.
 
 ```json
 {
@@ -333,8 +342,9 @@ Later sources win:
 
 1. built-in defaults
 2. `~/.pi/agent/pi-jev-model-router.json`
-3. `<cwd>/.pi/pi-jev-model-router.json` (trusted projects only)
-4. env: `TYPESAFE_API_KEY`, `JEV_ROUTER_MODE` (`auto|confirm|notify`), `JEV_ROUTER_OFF=1`
+3. env: `TYPESAFE_API_KEY`, `JEV_ROUTER_MODE` (`auto|confirm|notify`), `JEV_ROUTER_OFF=1`
+
+There is no project-level config: a cloned repo cannot inject router settings.
 
 A full example lives at
 [`extensions/pi-jev-model-router/pi-jev-model-router.example.json`](extensions/pi-jev-model-router/pi-jev-model-router.example.json).
@@ -364,8 +374,9 @@ pressure = max(today ÷ dailyUsd, month ÷ monthlyUsd)
 }
 ```
 
-Omit either cap to disable that dimension. Caps are policy, not a hard stop —
-they redirect routing, they do not block turns.
+The defaults are `$5/day` and `$100/month`. Set a cap to `0` to explicitly
+disable that dimension (omitting it keeps the default). Caps are policy, not a
+hard stop — they redirect routing, they do not block turns.
 
 ## Prompt-cache awareness
 
@@ -413,27 +424,47 @@ entirely when a model's pricing is unknown, so it never blocks on guesses. Set
 }
 ```
 
+## Security model
+
+- **Fixed endpoint** — the Jev URL is hardcoded (`https://api.typesafe.ai/v1/systemone`);
+  there is no `endpoint` config key, so a config file cannot redirect the
+  Bearer key or the payload.
+- **Two key sources, env first** — `TYPESAFE_API_KEY` from the environment,
+  then pi-typesafe's stored key at `~/.pi/agent/pi-typesafe/auth.json` (must be
+  mode `0600`). There is no `apiKey`/`apiKeyEnv` config key, and no output ever
+  prints a key value.
+- **Fixed ledger path** — spend persists only to
+  `~/.pi/agent/pi-jev-model-router-state.json`; `stateFile` is not configurable.
+- **Minimal payload** — Jev receives `{ request, conversation_excerpt }` only.
+  The excerpt is off by default (`historyTurns: 0`) and capped at 4000
+  characters when enabled; cwd, environment, and spend numbers are never sent.
+- **Config whitelist** — `merge()` copies only the keys the interface declares;
+  unknown keys in the config file are dropped, so removed keys cannot come back.
+
+**Migrating from 0.3.0:** if you wrote `apiKey` into a config file, switch to
+`TYPESAFE_API_KEY` or `/typesafe login`; if you used a project-level
+`<cwd>/.pi/pi-jev-model-router.json`, move its contents to
+`~/.pi/agent/pi-jev-model-router.json` (project files are no longer read); the
+new `$5/day` / `$100/month` budget defaults now apply unless you set your own.
+
 ## Configuration reference
 
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `enabled` | `true` | Master switch |
 | `useDefaultModels` | `true` | `false` drops the built-in model chains so only your config's models are used |
-| `mode` | `"auto"` | `auto` \| `confirm` \| `notify` |
-| `apiKeyEnv` / `apiKey` | `TYPESAFE_API_KEY` | TypeSafe credentials |
-| `endpoint` | `https://api.typesafe.ai/v1/systemone` | Evaluation endpoint |
+| `mode` | `"notify"` | `auto` \| `confirm` \| `notify` |
 | `jevModel` | `"jev-latest"` | Jev model alias |
 | `timeoutMs` | `3500` | Jev request timeout (retries 429/529) |
 | `minPromptChars` | `12` | Below this, a prompt counts as a continuation (a short *first* message is still routed) |
-| `historyTurns` | `4` | Conversation turns included as Jev state |
+| `historyTurns` | `0` | Conversation turns included as Jev state (`0` sends none) |
 | `confidenceThreshold` | `0.34` | Below this, fall back to `standard` instead of spending premium |
 | `stickiness` | `true` | Keep the current model when it is already the chosen one |
 | `routes` | see above | Capability tier candidate chains |
 | `kindModels` | see above | Task-specialist chains with `minTier` |
 | `kindMinimumTier` | see above | Per-kind floor tier |
-| `budget` | no caps | Spend policy |
+| `budget` | `$5/day`, `$100/month` | Spend policy (`0` disables a cap) |
 | `cache` | `aware`, cap `$0.05`, deadband `0.25` | Prompt-cache-aware switching |
-| `stateFile` | `~/.pi/agent/pi-jev-model-router-state.json` | Spend ledger |
 
 ## Failure behaviour
 
