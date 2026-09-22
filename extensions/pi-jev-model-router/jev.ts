@@ -97,6 +97,14 @@ function buildQuestions(): Record<string, unknown> {
   };
 }
 
+/**
+ * Wash a remote-controlled string before it is echoed to the terminal, an
+ * entry, or the LLM: printable ASCII only, capped at 300 characters.
+ */
+export function sanitizeRemote(s: string): string {
+  return s.slice(0, 300).replace(/[^\x20-\x7e]/g, "?");
+}
+
 function num(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -111,7 +119,7 @@ function parseAnalysis(payload: unknown, latencyMs: number): RouteAnalysis {
 
   const chosenKind = typeof kind.choice === "string" ? kind.choice : "chat";
   if (!(chosenKind in TASK_KINDS)) {
-    throw new JevError(`Jev returned an unknown task kind: ${chosenKind}`);
+    throw new JevError(`Jev returned an unknown task kind: ${sanitizeRemote(String(chosenKind))}`);
   }
 
   return {
@@ -155,10 +163,15 @@ async function postWithRetry(
       }
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
-        throw new JevError(`TypeSafe ${res.status}: ${detail.slice(0, 300).replace(/[^\x20-\x7e]/g, "?")}`, res.status);
+        throw new JevError(`TypeSafe ${res.status}: ${sanitizeRemote(detail)}`, res.status);
       }
       return await res.json();
     } catch (error) {
+      // fetch()/res.json() failures can carry response bytes in their message.
+      // Wash only that text: error class, status, retry and fail-open handling below are untouched.
+      if (error instanceof Error && !(error instanceof JevError)) {
+        error.message = sanitizeRemote(error.message);
+      }
       lastError = error;
       if (error instanceof JevError && error.status !== 429 && error.status !== 529) throw error;
       if (signal.aborted) throw new JevError("aborted");

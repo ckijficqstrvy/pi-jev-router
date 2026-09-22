@@ -22,7 +22,7 @@ import {
   spendSnapshot,
   type Ledger,
 } from "./budget";
-import { classifyRequest, JevError, type RouteAnalysis } from "./jev";
+import { classifyRequest, JevError, sanitizeRemote, type RouteAnalysis } from "./jev";
 import {
   decide,
   describeDecision,
@@ -412,10 +412,12 @@ function setThinking(level: string): void {
 }
 
 function formatAnalysis(analysis: RouteAnalysis): string {
-  const probs = Object.entries(analysis.kindProbabilities)
-    .sort((a, b) => b[1] - a[1])
-    .map(([kind, p]) => `${kind} ${(p * 100).toFixed(0)}%`)
-    .join(", ");
+  const probs = sanitizeRemote(
+    Object.entries(analysis.kindProbabilities)
+      .sort((a, b) => b[1] - a[1])
+      .map(([kind, p]) => `${kind} ${(p * 100).toFixed(0)}%`)
+      .join(", "),
+  );
   return [
     `kind: ${analysis.kind} (confidence ${analysis.kindConfidence.toFixed(2)})`,
     `      ${probs}`,

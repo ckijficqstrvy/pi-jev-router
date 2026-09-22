@@ -96,25 +96,27 @@ a subtask.
 ## Configuration
 
 Optional. Create `~/.pi/agent/pi-jev-model-router.json`
-(see `pi-jev-model-router.example.json`), or `<project>/.pi/pi-jev-model-router.json` for
-project-specific routes. Later sources win: defaults → global → project → env
-(`JEV_ROUTER_MODE`, `JEV_ROUTER_OFF=1`).
+(see `pi-jev-model-router.example.json`). Later sources win: defaults →
+`~/.pi/agent/pi-jev-model-router.json` → env (`TYPESAFE_API_KEY`,
+`JEV_ROUTER_MODE`, `JEV_ROUTER_OFF=1`). There is no project-level config:
+project config files are no longer read, so a cloned repo cannot inject router
+settings.
 
 ```json
 {
   "enabled": true,
-  "mode": "auto",
+  "mode": "notify",
   "confidenceThreshold": 0.34,
   "stickiness": true,
   "budget": { "dailyUsd": 5, "monthlyUsd": 100, "softRatio": 0.7, "hardRatio": 0.9 },
   "routes": {
-    "quick":    [{ "provider": "openrouter", "model": "~google/gemini-flash-latest", "thinkingLevel": "off" }],
-    "standard": [{ "provider": "openrouter", "model": "~deepseek/deepseek-pro-latest" }],
-    "high":     [{ "provider": "openrouter", "model": "openai/gpt-5.5" }],
-    "premium":  [{ "provider": "openrouter", "model": "~anthropic/claude-opus-latest" }]
+    "quick":    [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash", "thinkingLevel": "off" }],
+    "standard": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro", "thinkingLevel": "low" }],
+    "high":     [{ "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest", "thinkingLevel": "medium" }],
+    "premium":  [{ "provider": "openrouter", "model": "~anthropic/claude-opus-latest", "thinkingLevel": "high" }]
   },
   "kindModels": {
-    "implement": [{ "provider": "openrouter", "model": "openai/gpt-5.3-codex", "minTier": "standard" }]
+    "implement": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro", "minTier": "standard" }]
   },
   "kindMinimumTier": { "plan": "high", "review": "high", "implement": "standard" }
 }
