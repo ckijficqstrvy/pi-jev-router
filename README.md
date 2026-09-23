@@ -62,28 +62,30 @@ for other installation methods and authentication options.
 
 ### 2. Install this package
 
-From npm (recommended):
+From this repo's git ref (recommended — the hardened releases live here):
 
 ```bash
-pi install npm:pi-jev-model-router
-```
-
-From a pinned git ref:
-
-```bash
-pi install git:github.com/da-vinci-noob/pi-jev-model-router@v0.3.0
+pi install git:github.com/ckijficqstrvy/pi-jev-router@v0.4.0
 ```
 
 From a local checkout:
 
 ```bash
-pi install /absolute/path/to/pi-jev-model-router
+pi install /absolute/path/to/pi-jev-router
 ```
 
 Try it once without installing:
 
 ```bash
-pi -e npm:pi-jev-model-router
+pi -e git:github.com/ckijficqstrvy/pi-jev-router@v0.4.0
+```
+
+From npm — beware: `npm:pi-jev-model-router` is the **upstream** package
+(da-vinci-noob) and npm still serves its `0.3.0`, which predates the security
+hardening described below. This fork is not published to npm.
+
+```bash
+pi install npm:pi-jev-model-router   # upstream 0.3.0, pre-hardening
 ```
 
 Manage it like any other pi package:
@@ -489,6 +491,10 @@ The [pi package gallery](https://pi.dev/packages) is built from **npm**: it list
 packages that are tagged with the `pi-package` keyword. There is no separate
 submission form — publishing to npm *is* the submission.
 
+> This fork is distributed from its own GitHub repo (see **Install**), not
+> from npm. The steps below are the path to a gallery release if you ever
+> want one.
+
 This repository is already prepared for it:
 
 - `package.json` contains `"keywords": ["pi-package", ...]`
@@ -511,15 +517,16 @@ npm publish --access public
 Then:
 
 1. The gallery indexes it on its next crawl (usually minutes; allow a few hours).
-2. Check the listing at `https://pi.dev/packages/pi-jev-model-router`.
+2. Check the listing at `https://pi.dev/packages/<your-package-name>`.
 3. Anyone can then install it with `pi install npm:pi-jev-model-router`.
 
 **Releases:** bump `version` in `package.json`, commit, tag, and re-run
 `npm publish`. Keep the `image` URL pointed at a released tag or `main` so it
 never 404s.
 
-**If the name is taken**, publish under a scope (`@yourname/pi-jev-model-router`)
-— the gallery indexes scoped packages too; install with
+**The name is taken** — `pi-jev-model-router` on npm belongs to upstream — so
+publish under a scope (`@yourname/pi-jev-model-router`); the gallery indexes
+scoped packages too, and they install with
 `pi install npm:@yourname/pi-jev-model-router`.
 
 **Git-only distribution** also works (`pi install git:github.com/user/repo@v1`),
@@ -531,8 +538,8 @@ over `image`).
 ## Development
 
 ```bash
-git clone https://github.com/da-vinci-noob/pi-jev-model-router
-cd pi-jev-model-router
+git clone https://github.com/ckijficqstrvy/pi-jev-router
+cd pi-jev-router
 
 # load the package into a throwaway pi run (ignores auto-discovered extensions)
 pi -ne -e "$PWD" -p "Explain what an idempotency key does."

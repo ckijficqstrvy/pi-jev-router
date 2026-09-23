@@ -22,11 +22,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/da-vinci-noob/pi-jev-model-router.git"
+    "url": "git+https://github.com/ckijficqstrvy/pi-jev-router.git"
   },
-  "homepage": "https://github.com/da-vinci-noob/pi-jev-model-router#readme",
+  "homepage": "https://github.com/ckijficqstrvy/pi-jev-router#readme",
   "bugs": {
-    "url": "https://github.com/da-vinci-noob/pi-jev-model-router/issues"
+    "url": "https://github.com/ckijficqstrvy/pi-jev-router/issues"
   },
   "files": [
     "extensions",
@@ -38,7 +38,7 @@
     "extensions": [
       "./extensions/pi-jev-model-router/index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/da-vinci-noob/pi-jev-model-router/main/assets/decision-entry.png"
+    "image": "https://raw.githubusercontent.com/ckijficqstrvy/pi-jev-router/v0.4.0/assets/decision-entry.png"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
