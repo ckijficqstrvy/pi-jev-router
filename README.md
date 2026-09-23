@@ -45,7 +45,7 @@ request.
 ## Requirements
 
 - pi (`@earendil-works/pi-coding-agent`)
-- Node.js 20+
+- Node.js 22.19+ (the same floor pi itself requires)
 - A TypeSafe API key with access to `jev-latest` — <https://typesafe.ai>
 
 ## Install
@@ -109,15 +109,17 @@ other permission bits are set. There is no config key for the API key.
 ### 4. Use it
 
 Start pi and type a request. Before the turn runs, the router announces the
-decision:
+decision (same text in every mode; `auto` applies the switch first):
 
 ```
-jev-router → high  openai/gpt-5.3-codex
-implement · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high
+Jev → standard (openrouter/xiaomi/mimo-v2.6-pro)
+plan · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high (used standard) · budget 74% of cap → one tier down
 ```
 
-The status bar shows `jev-router:<tier> · $spend · %cap`, or `jev-router:off` when
-disabled. No configuration is required — sensible defaults are built in.
+The status bar shows e.g. `jev-router:standard · $0.42 · 74% · notify` — active
+tier, spend, budget pressure, and the mode whenever it is not `auto` — or
+`jev-router:off` when disabled. No configuration is required — sensible
+defaults are built in.
 
 ## Commands
 
@@ -126,7 +128,7 @@ disabled. No configuration is required — sensible defaults are built in.
 | `/jev-router` | Status: mode, spend, tier chains, kind specialists, last decision |
 | `/jev-router on` / `off` | Enable/disable routing |
 | `/jev-router mode auto\|confirm\|notify` | `auto` switches silently; `confirm` asks each turn; `notify` only tells you |
-| `/jev-router budget daily 10` | Session-only daily cap (persist it in `~/.pi/agent/pi-jev-model-router.json`) |
+| `/jev-router budget daily 10` | Session-only daily cap (persist it in `~/.pi/agent/pi-jev-model-router/config.json`) |
 | `/jev-router budget monthly 150` | Session-only monthly cap |
 | `/jev-router why` | Re-run Jev on the last prompt and show the full judgment + decision trace |
 | `/jev-router revert` | Switch back to the model that was active before the last auto-switch |
@@ -135,15 +137,19 @@ disabled. No configuration is required — sensible defaults are built in.
 The model can also call the `jev_route` tool to ask for a tier recommendation for
 a subtask.
 
+`on`/`off`, `mode`, and `budget` changes are session-only: `/reload` or a
+restart re-reads `enabled` and `mode` from `config.json` and the
+`JEV_ROUTER_*` environment.
+
 ### What you see
 
 Every decision is a durable entry in the transcript, so the chosen model and its
 justification are always available:
 
 ```
-jev-router → high  openai/gpt-5.3-codex
-implement · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high
-· budget 12% of cap → one tier down
+jev-router → standard  openrouter/xiaomi/mimo-v2.6-pro
+plan · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high (used standard)
+· budget 74% of cap → one tier down
 ```
 
 The glyph encodes the action: `→` switched, `=` already active (stickiness),
@@ -248,14 +254,14 @@ pi --list-models | grep -E 'gpt-5|codex'
 The first column is the **provider id** and the second is the **model id**. Those
 are exactly the two fields the config uses.
 
-> Providers not yet configured can be added with `pi /login`, an API key
+> Providers not yet configured can be added with `/login` inside pi, an API key
 > environment variable, or a custom provider registered by another extension —
 > including local servers such as Ollama or llama.cpp. See the
 > [providers docs](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/providers.md).
 
 ### 2. Point the tiers at your models
 
-Create `~/.pi/agent/pi-jev-model-router.json` (the only config file —
+Create `~/.pi/agent/pi-jev-model-router/config.json` (the only config file —
 project-level configs are not read). Anything you set is merged over the
 defaults, per tier.
 
@@ -341,7 +347,7 @@ entries under `kindModels` and `kindMinimumTier`. Because the question is a Jev
 Later sources win:
 
 1. built-in defaults
-2. `~/.pi/agent/pi-jev-model-router.json`
+2. `~/.pi/agent/pi-jev-model-router/config.json`
 3. env: `TYPESAFE_API_KEY`, `JEV_ROUTER_MODE` (`auto|confirm|notify`), `JEV_ROUTER_OFF=1`
 
 There is no project-level config: a cloned repo cannot inject router settings.
@@ -353,7 +359,7 @@ Run `/reload` after editing config.
 ## Budget management
 
 Cost is accumulated from each assistant message's computed cost into
-`~/.pi/agent/pi-jev-model-router-state.json`, together with Jev request counts.
+`~/.pi/agent/pi-jev-model-router/state.json`, together with Jev request counts.
 
 ```
 pressure = max(today ÷ dailyUsd, month ÷ monthlyUsd)
@@ -384,14 +390,16 @@ Switching models discards the provider's prompt cache, and caches are per-model.
 The next request then re-reads the entire prefix — system prompt, tool schemas,
 and conversation — at the new model's full input rate. Cache reads are ~10% of
 input on the major providers, so a switch effectively costs the whole context
-once, and a switch back costs it again. On a 50k context that is roughly
-$0.10 on Sonnet; at 200k, roughly $0.45.
+once, and a switch back costs it again. Priced at Sonnet-class rates
+(~$3/M input, ~$3.75/M cache write, ~$0.30/M cache read per million tokens),
+one switch re-reads a 50k context for roughly $0.32 and a 200k context for
+roughly $1.29.
 
 The router therefore gates switches instead of making them freely:
 
-- **Cache penalty cap** — estimates the miss (`contextTokens × new model's input
-  rate`, minus the cached rate) and refuses the switch when it exceeds
-  `maxPenaltyUsd`.
+- **Cache penalty cap** — estimates the miss (`contextTokens × (new model's
+  input + cache-write rate − current model's cache-read rate)`) and refuses
+  the switch when it exceeds `maxPenaltyUsd`.
 - **Dead-band** — demand has to clear the current tier's band (`tier ± 0.5`) by
   `deadband` before a tier change is considered, so prompts hovering on a
   boundary stop flapping between two models.
@@ -404,7 +412,7 @@ Held turns still record the decision, and say so:
 
 ```
 jev-router = high  openrouter/~anthropic/claude-sonnet-latest
-explain · complexity 0.40/3 · capability 0.30/3 · reasoning 0.20 → standard, held on high to keep the cache
+explain · complexity 0.60/3 · capability 0.50/3 · reasoning 0.30 → standard, held on high to keep the cache
 · cache penalty ~$0.186 on 120k tokens — keeping the warm cache
 ```
 
@@ -434,7 +442,7 @@ entirely when a model's pricing is unknown, so it never blocks on guesses. Set
   mode `0600`). There is no `apiKey`/`apiKeyEnv` config key, and no output ever
   prints a key value.
 - **Fixed ledger path** — spend persists only to
-  `~/.pi/agent/pi-jev-model-router-state.json`; `stateFile` is not configurable.
+  `~/.pi/agent/pi-jev-model-router/state.json`; `stateFile` is not configurable.
 - **Minimal payload** — Jev receives `{ request, conversation_excerpt }` only.
   The excerpt is off by default (`historyTurns: 0`) and capped at 4000
   characters when enabled; cwd, environment, and spend numbers are never sent.
@@ -444,7 +452,7 @@ entirely when a model's pricing is unknown, so it never blocks on guesses. Set
 **Migrating from 0.3.0:** if you wrote `apiKey` into a config file, switch to
 `TYPESAFE_API_KEY` or `/typesafe login`; if you used a project-level
 `<cwd>/.pi/pi-jev-model-router.json`, move its contents to
-`~/.pi/agent/pi-jev-model-router.json` (project files are no longer read); the
+`~/.pi/agent/pi-jev-model-router/config.json` (project files are no longer read); the
 new `$5/day` / `$100/month` budget defaults now apply unless you set your own.
 
 ## Configuration reference
@@ -455,7 +463,7 @@ new `$5/day` / `$100/month` budget defaults now apply unless you set your own.
 | `useDefaultModels` | `true` | `false` drops the built-in model chains so only your config's models are used |
 | `mode` | `"notify"` | `auto` \| `confirm` \| `notify` |
 | `jevModel` | `"jev-latest"` | Jev model alias |
-| `timeoutMs` | `3500` | Jev request timeout (retries 429/529) |
+| `timeoutMs` | `3500` | Overall Jev time budget: one timeout shared by up to 3 attempts (429/529 and network errors are retried inside it) |
 | `minPromptChars` | `12` | Below this, a prompt counts as a continuation (a short *first* message is still routed) |
 | `historyTurns` | `0` | Conversation turns included as Jev state (`0` sends none) |
 | `confidenceThreshold` | `0.34` | Below this, fall back to `standard` instead of spending premium |
@@ -468,11 +476,12 @@ new `$5/day` / `$100/month` budget defaults now apply unless you set your own.
 
 ## Failure behaviour
 
-Routing never blocks your turn. A missing key, network error, timeout (default
-3.5 s, retried on 429/529), or unknown model means: warn in the status line and
-run the prompt on the current model unchanged. Prompts starting with `/`, pure
-acknowledgements (`yes`, `continue`, …), and messages sent by other extensions
-are never routed.
+Routing never blocks your turn. A missing key, network error, timeout (a
+3.5 s overall budget shared by up to three attempts — 429/529 and transient
+network errors are retried within it), or unknown model means: warn in the
+status line and run the prompt on the current model unchanged. Prompts
+starting with `/`, pure acknowledgements (`yes`, `continue`, …), image-only
+messages, and messages sent by other extensions are never routed.
 
 ## Publishing to pi.dev/packages
 
@@ -529,6 +538,9 @@ cd pi-jev-model-router
 pi -ne -e "$PWD" -p "Explain what an idempotency key does."
 
 # or copy into the auto-discovered location for hot reload
+# (mkdir first: without the directory, cp would flatten the files into
+#  ~/.pi/agent/extensions/*.ts and pi would try to load every .ts as an extension)
+mkdir -p ~/.pi/agent/extensions
 cp -R extensions/pi-jev-model-router ~/.pi/agent/extensions/
 ```
 

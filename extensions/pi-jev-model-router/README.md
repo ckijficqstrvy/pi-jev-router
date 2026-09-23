@@ -22,7 +22,7 @@ you type a prompt
      confidence guard → budget guard → availability guard → cache guard
         │
         ▼
-   pi.setModel(node) + pi.setThinkingLevel(node)  → the turn runs on that model
+   pi.setModel(...) + pi.setThinkingLevel(...)   → the turn runs on that model
 ```
 
 The split is deliberate: **Jev judges the task, code owns the budget.** Changing
@@ -35,9 +35,9 @@ semantic read of the request.
 always see which model the request went to and why:
 
 ```
-jev-router → high  openai/gpt-5.3-codex
-implement · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high
-· budget 12% of cap → one tier down
+jev-router → standard  openrouter/xiaomi/mimo-v2.6-pro
+plan · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high (used standard)
+· budget 74% of cap → one tier down
 ```
 
 Expand the entry (same key as other collapsible content) to see the raw judgment:
@@ -62,14 +62,31 @@ conversation, or no configured route is available. A short *first* message in a
 fresh session (like `hi`) is a real request and **does** get routed. Duplicate
 skip entries for the same reason and model are collapsed.
 
-**In the status bar.** `jev-router:` followed by the active tier and session
-spend, e.g. `jev-router:high · $0.42 · 12%`, `jev-router:on` before the first
-route, or `jev-router:off` when disabled.
+**In the status bar.** `jev-router:` followed by the active tier, session
+spend, budget pressure, and mode, e.g. `jev-router:standard · $0.42 · 74% ·
+notify`, `jev-router:on` before the first route, or `jev-router:off` when
+disabled.
 
 ## Install / location
 
-This extension lives at `~/.pi/agent/extensions/pi-jev-model-router/` (global, auto-discovered).
-pi hot-reloads it with `/reload` after edits.
+Install it as a pi package — `pi install` records the source in
+`~/.pi/agent/settings.json` under `packages`, and pi resolves it on every
+start:
+
+```sh
+pi install npm:pi-jev-model-router      # from npm
+pi install /absolute/path/to/checkout   # from a local checkout
+```
+
+Or drop it into pi's auto-discovered global directory instead:
+
+```sh
+mkdir -p ~/.pi/agent/extensions
+cp -R extensions/pi-jev-model-router ~/.pi/agent/extensions/
+```
+
+Either way, `/reload` re-imports the extension and re-reads the config: pi
+clears its extension cache and re-resolves installed packages on reload.
 
 It needs a TypeSafe API key:
 
@@ -93,11 +110,15 @@ export TYPESAFE_API_KEY=...
 The LLM can also call the `jev_route` tool to ask for a tier recommendation for
 a subtask.
 
+`on`/`off`, `mode`, and `budget` changes are session-only: `/reload` or a
+restart re-reads `enabled` and `mode` from the config file and the
+`JEV_ROUTER_*` environment.
+
 ## Configuration
 
-Optional. Create `~/.pi/agent/pi-jev-model-router.json`
+Optional. Create `~/.pi/agent/pi-jev-model-router/config.json`
 (see `pi-jev-model-router.example.json`). Later sources win: defaults →
-`~/.pi/agent/pi-jev-model-router.json` → env (`TYPESAFE_API_KEY`,
+`~/.pi/agent/pi-jev-model-router/config.json` → env (`TYPESAFE_API_KEY`,
 `JEV_ROUTER_MODE`, `JEV_ROUTER_OFF=1`). There is no project-level config:
 project config files are no longer read, so a cloned repo cannot inject router
 settings.
@@ -150,7 +171,7 @@ Rules of thumb baked into the defaults:
   (clearly architectural), which is allowed to stay at `standard`
 
 Spend is accumulated from each assistant message's computed cost into
-`~/.pi/agent/pi-jev-model-router-state.json`, alongside Jev request counts.
+`~/.pi/agent/pi-jev-model-router/state.json`, alongside Jev request counts.
 
 ### Prompt-cache awareness
 
@@ -159,8 +180,8 @@ prefix at full input price — cache reads are only ~10% of input, so one switch
 costs roughly the entire context once, on every provider. The router gates
 switches instead of making them freely:
 
-- `maxPenaltyUsd` — estimated miss (`contextTokens × new input rate − cached
-  rate`) above this blocks the switch
+- `maxPenaltyUsd` — estimated miss (`contextTokens × (new input + cache-write
+  rate − current cache-read rate)`) above this blocks the switch
 - `deadband` — demand must clear the current tier's band (`tier ± 0.5`) by this
   much before a tier change happens, so boundary-hovering prompts stop flapping
 - `bypassTierDelta` — a jump this large still switches (genuine capability change)
