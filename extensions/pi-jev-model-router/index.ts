@@ -269,9 +269,6 @@ async function analyse(
     {
       prompt,
       history: historyExcerpt(ctx, config.historyTurns),
-      activeModel: activeKey,
-      contextTokens,
-      spend,
     },
     config,
     cred.key,
@@ -325,6 +322,7 @@ async function applyDecision(
   }
 
   if (runtime.config.mode === "notify") {
+    statusLine(ctx, runtime);
     notify(ctx, `${headline}\n${detail}`, "info");
     appendDecisionEntry(analysis, decision, "notified", runtime);
     return { action: "notified", message: `${headline} (notify only)` };
@@ -346,6 +344,7 @@ async function applyDecision(
     const choice = await ctx.ui.select(`Jev suggests ${decision.tier}\n${detail}`, options_);
     if (!choice || choice.startsWith("Keep")) {
       appendDecisionEntry(analysis, decision, "skipped", runtime);
+      statusLine(ctx, runtime);
       return { action: "skipped", message: "kept current model" };
     }
     if (choice.startsWith(`Use ${cheaper}`)) {
@@ -365,6 +364,7 @@ async function applyDecision(
       : undefined;
   if (!model) {
     appendDecisionEntry(analysis, decision, "skipped", runtime);
+    statusLine(ctx, runtime);
     return { action: "skipped", message: `${headline} — model not available in this build` };
   }
 
@@ -372,6 +372,7 @@ async function applyDecision(
   const ok = await switchModel(model);
   if (!ok) {
     appendDecisionEntry(analysis, decision, "skipped", runtime);
+    statusLine(ctx, runtime);
     return { action: "skipped", message: `${headline} — no auth configured for provider` };
   }
 

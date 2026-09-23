@@ -26,6 +26,7 @@ export const TIERS: readonly Tier[] = ["quick", "standard", "high", "premium"] a
 
 export type Mode = "auto" | "confirm" | "notify";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+const THINKING_LEVELS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export interface RouteTarget {
   provider: string;
@@ -201,10 +202,22 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function normalizeChain(value: unknown): RouteChain | undefined {
   const list = Array.isArray(value) ? value : value && typeof value === "object" ? [value] : [];
-  const targets = list.filter(
-    (item): item is RouteTarget =>
-      Boolean(item) && typeof item === "object" && typeof (item as RouteTarget).provider === "string" && typeof (item as RouteTarget).model === "string",
-  );
+  // Whitelist rebuild: drop the incoming object and copy only the declared
+  // fields with validated types, so unknown keys cannot ride into config.
+  const targets: RouteTarget[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    if (typeof raw.provider !== "string" || typeof raw.model !== "string") continue;
+    const target: RouteTarget = { provider: raw.provider, model: raw.model };
+    if (typeof raw.thinkingLevel === "string" && THINKING_LEVELS.includes(raw.thinkingLevel)) {
+      target.thinkingLevel = raw.thinkingLevel as ThinkingLevel;
+    }
+    if (typeof raw.minTier === "string" && (TIERS as readonly string[]).includes(raw.minTier)) {
+      target.minTier = raw.minTier as Tier;
+    }
+    targets.push(target);
+  }
   return targets.length > 0 ? targets : undefined;
 }
 

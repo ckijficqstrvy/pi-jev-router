@@ -1,6 +1,5 @@
 import type { JevRouterConfig } from "./config";
 import { TASK_KINDS } from "./config";
-import type { SpendSnapshot } from "./budget";
 
 /** The one URL any key or payload can ever reach. Hardcoded on purpose. */
 const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
@@ -30,12 +29,14 @@ export interface RouteAnalysis {
   usage?: { input_tokens: number; output_tokens: number };
 }
 
+/**
+ * Only fields that ever leave this process. Model, context size and spend are
+ * deliberately absent: buildState() is the payload whitelist (privacy: Jev
+ * receives the request and an optional excerpt, nothing else).
+ */
 export interface ClassifyInput {
   prompt: string;
   history?: string;
-  activeModel?: string;
-  contextTokens?: number;
-  spend: SpendSnapshot;
 }
 
 export class JevError extends Error {
@@ -118,7 +119,7 @@ function parseAnalysis(payload: unknown, latencyMs: number): RouteAnalysis {
   const reasoning = answers.needs_deep_reasoning ?? {};
 
   const chosenKind = typeof kind.choice === "string" ? kind.choice : "chat";
-  if (!(chosenKind in TASK_KINDS)) {
+  if (!Object.hasOwn(TASK_KINDS, chosenKind)) {
     throw new JevError(`Jev returned an unknown task kind: ${sanitizeRemote(String(chosenKind))}`);
   }
 
