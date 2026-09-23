@@ -67,7 +67,7 @@ for other installation methods and authentication options.
 From this repo's git ref (recommended — the hardened releases live here):
 
 ```bash
-pi install git:github.com/ckijficqstrvy/pi-jev-router@v0.4.0
+pi install git:github.com/ckijficqstrvy/pi-jev-router@v0.5.0
 ```
 
 From a local checkout:
@@ -79,7 +79,7 @@ pi install /absolute/path/to/pi-jev-router
 Try it once without installing:
 
 ```bash
-pi -e git:github.com/ckijficqstrvy/pi-jev-router@v0.4.0
+pi -e git:github.com/ckijficqstrvy/pi-jev-router@v0.5.0
 ```
 
 From npm — beware: `npm:pi-jev-model-router` is the **upstream** package
