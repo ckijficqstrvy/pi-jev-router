@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { MODEL_FACTS, factsValid, rankedFacts, sliceBands } from "./facts";
 
 /**
  * pi-jev-model-router config.
@@ -50,9 +51,31 @@ export const TIER_THINKING: Record<Tier, ThinkingLevel> = {
   premium: "high",
 };
 
+export type Profile = "cheap" | "balanced" | "quality";
+const PROFILES: readonly string[] = ["cheap", "balanced", "quality"];
+
+/**
+ * Per-profile upper price bound per tier, in the ceiling metric
+ * (input + 2×output, USD per million tokens); null = unbounded.
+ * Bounds are contiguous — a tier's implicit floor is the tier below's bound —
+ * so the price bands are disjoint by construction (capability floors would
+ * not be: the strongest cheap model would saturate every tier).
+ */
+export const PROFILE_CEILINGS: Record<Profile, Record<Tier, number | null>> = {
+  cheap: { quick: 1, standard: 3, high: 10, premium: 25 },
+  balanced: { quick: 1.5, standard: 5, high: 15, premium: 44 },
+  quality: { quick: 2, standard: 10, high: 44, premium: null },
+};
+
 export interface RouteTarget {
   provider: string;
   model: string;
+  /**
+   * Set only for config.json-sourced entries (and `prefer` heads): explicit
+   * choices are the top layer — policy filters (deny/allowProviders/price
+   * bands) never touch them, exactly like a thinkingLevel pin.
+   */
+  explicit?: boolean;
   /**
    * Config pin, set only when config.json writes it explicitly: it wins over
    * Jev's per-task thinking judgment (precedence: pin > Jev > ladder > tier
@@ -120,6 +143,18 @@ export interface JevRouterConfig {
   confidenceThreshold: number;
   /** Don't switch models when the current model already sits on the chosen tier. */
   stickiness: boolean;
+  /** Budget profile supplying the per-tier price bands (see PROFILE_CEILINGS). */
+  profile: Profile;
+  /** Per-tier ceiling overrides in the profile's metric; null = unbounded. */
+  ceilings: Partial<Record<Tier, number | null>>;
+  /** Glob patterns removed from derived chains (e.g. ["*claude-opus*"]). */
+  deny: string[];
+  /** Non-empty → only these providers survive in derived chains. */
+  allowProviders: string[];
+  /** Heads injected at the top of a tier chain; explicit, never filtered. */
+  prefer: Partial<Record<Tier, string[]>>;
+  /** Derive non-written tiers from model-facts.json; false = authored defaults. */
+  autoRoutes: boolean;
   routes: Record<Tier, RouteChain>;
   /**
    * Kind-specific model preferences. When a kind has a chain here, models are
@@ -143,15 +178,22 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
   historyTurns: 0,
   confidenceThreshold: 0.34,
   stickiness: true,
+  profile: "balanced",
+  ceilings: {},
+  deny: [],
+  allowProviders: [],
+  prefer: {},
+  autoRoutes: true,
   // No `thinkingLevel` here on purpose: the default is "let Jev's 5th-question
   // judgment decide" (with TIER_THINKING as fallback). Write thinkingLevel in
   // config.json to pin a route.
   routes: {
-    // Refreshed 2026-09 against the Artificial Analysis intelligence index:
-    // glm-flash ~42 vs mimo-flash ~22–25 → mimo-flash demoted to fallback.
+    // User pick: mimo-v2.6-flash leads quick (cheapest + same family as
+    // standard; quick-tier tasks are low-stakes, so the index gap matters
+    // least here). glm-flash (AA ≈42) stays as the stronger fallback.
     quick: [
-      { provider: "openrouter", model: "~z-ai/glm-flash-latest" },
       { provider: "openrouter", model: "xiaomi/mimo-v2.6-flash" },
+      { provider: "openrouter", model: "~z-ai/glm-flash-latest" },
     ],
     standard: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-pro" }],
     // Budget pick (2026-09): no first-tier flagships at high/premium.
@@ -250,6 +292,11 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+}
+
 function normalizeChain(value: unknown): RouteChain | undefined {
   const list = Array.isArray(value) ? value : value && typeof value === "object" ? [value] : [];
   // Whitelist rebuild: drop the incoming object and copy only the declared
@@ -266,6 +313,8 @@ function normalizeChain(value: unknown): RouteChain | undefined {
     if (typeof raw.minTier === "string" && (TIERS as readonly string[]).includes(raw.minTier)) {
       target.minTier = raw.minTier as Tier;
     }
+    // Patch-sourced entries are explicit user intent (top layer).
+    target.explicit = true;
     targets.push(target);
   }
   return targets.length > 0 ? targets : undefined;
@@ -291,6 +340,36 @@ function merge(base: JevRouterConfig, patch: unknown): JevRouterConfig {
     next.confidenceThreshold = p.confidenceThreshold;
   }
   if (typeof p.stickiness === "boolean") next.stickiness = p.stickiness;
+
+  const profile = p.profile;
+  if (typeof profile === "string" && (PROFILES as readonly string[]).includes(profile)) {
+    next.profile = profile as Profile;
+  }
+  if (typeof p.autoRoutes === "boolean") next.autoRoutes = p.autoRoutes;
+  next.deny = stringList(p.deny);
+  next.allowProviders = stringList(p.allowProviders);
+
+  const ceilingsRaw = asRecord(p.ceilings);
+  const ceilings: Partial<Record<Tier, number | null>> = { ...base.ceilings };
+  for (const tier of TIERS) {
+    if (!(tier in ceilingsRaw)) continue;
+    const value = ceilingsRaw[tier];
+    if (value === null || (typeof value === "number" && Number.isFinite(value) && value >= 0)) {
+      ceilings[tier] = value as number | null;
+    }
+  }
+  next.ceilings = ceilings;
+
+  const preferRaw = asRecord(p.prefer);
+  const prefer: Partial<Record<Tier, string[]>> = { ...base.prefer };
+  for (const tier of TIERS) {
+    const value = preferRaw[tier];
+    if (Array.isArray(value)) {
+      const list = stringList(value);
+      if (list.length > 0) prefer[tier] = list;
+    }
+  }
+  next.prefer = prefer;
 
   const routes = { ...base.routes };
   const rawRoutes = asRecord(p.routes);
@@ -597,6 +676,21 @@ const ENV_VARS: readonly EnvVarSpec[] = [
       return changed;
     },
   },
+  {
+    name: "JEV_ROUTER_PROFILE",
+    expected: "cheap, balanced, or quality",
+    parse: (raw) => {
+      const value = raw.trim().toLowerCase();
+      return (PROFILES as readonly string[]).includes(value) ? value : INVALID;
+    },
+    apply: (config, value) => assign(config, "profile", value as Profile),
+  },
+  {
+    name: "JEV_ROUTER_AUTO_ROUTES",
+    expected: BOOL_EXPECTED,
+    parse: (raw) => parseBool(raw) ?? INVALID,
+    apply: (config, value) => assign(config, "autoRoutes", value as boolean),
+  },
 ];
 
 export interface EnvOverrideResult {
@@ -685,6 +779,89 @@ function invariantWarnings(config: JevRouterConfig): string[] {
   return warnings;
 }
 
+/** Effective per-tier ceiling: an explicit `ceilings` entry beats the profile table. */
+export function ceilingFor(config: JevRouterConfig, tier: Tier): number | null {
+  const own = config.ceilings[tier];
+  if (own !== undefined) return own;
+  return PROFILE_CEILINGS[config.profile][tier] ?? null;
+}
+
+function globRe(pattern: string): RegExp {
+  const body = pattern.toLowerCase().replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${body}$`);
+}
+
+/** L2 policy: does `deny`/`allowProviders` remove this (derived) entry? */
+function policyDenies(config: JevRouterConfig, target: RouteTarget): boolean {
+  if (config.allowProviders.length > 0 && !config.allowProviders.includes(target.provider)) return true;
+  if (config.deny.length === 0) return false;
+  const full = `${target.provider}/${target.model}`.toLowerCase();
+  const bare = target.model.toLowerCase();
+  return config.deny.some((pattern) => {
+    const re = globRe(pattern);
+    return re.test(full) || re.test(bare);
+  });
+}
+
+/**
+ * Facts-derived chains: capability rank sliced into the profile's price
+ * bands. Returns undefined when facts are unusable or autoRoutes is off —
+ * the caller then keeps the authored default chains (fail-open).
+ */
+function factsRoutes(config: JevRouterConfig): Record<Tier, RouteChain> | undefined {
+  if (!config.autoRoutes || !config.useDefaultModels) return undefined;
+  if (!factsValid(MODEL_FACTS)) return undefined;
+  const ranked = rankedFacts(MODEL_FACTS);
+  const bands = sliceBands(ranked, TIERS.map((tier) => ceilingFor(config, tier)));
+  const routes = {} as Record<Tier, RouteChain>;
+  TIERS.forEach((tier, i) => {
+    routes[tier] = bands[i].map((fact) => ({ provider: fact.provider, model: fact.model }));
+  });
+  return routes;
+}
+
+/**
+ * L1+L2 composition, run last in resolveConfig():
+ *   facts slice for tiers the user did not write → policy filter on
+ *   non-explicit entries → explicit `prefer` heads on top.
+ * Explicit config entries are never filtered (L3 wins).
+ */
+function applyModelPolicy(config: JevRouterConfig): JevRouterConfig {
+  // Fresh containers: shallow copies share arrays/dicts with DEFAULT_CONFIG.
+  config.routes = Object.fromEntries(TIERS.map((tier) => [tier, [...config.routes[tier]]])) as Record<Tier, RouteChain>;
+  config.kindModels = Object.fromEntries(Object.entries(config.kindModels).map(([k, v]) => [k, [...v]]));
+
+  const derived = factsRoutes(config);
+  if (derived) {
+    for (const tier of TIERS) {
+      if (config.routes[tier].some((target) => target.explicit)) continue; // user owns this tier
+      config.routes[tier] = derived[tier];
+    }
+  }
+
+  for (const tier of TIERS) {
+    config.routes[tier] = config.routes[tier].filter((target) => target.explicit || !policyDenies(config, target));
+  }
+  for (const [kind, chain] of Object.entries(config.kindModels)) {
+    config.kindModels[kind] = chain.filter((target) => target.explicit || !policyDenies(config, target));
+  }
+
+  for (const tier of TIERS) {
+    const heads = config.prefer[tier];
+    if (!heads || heads.length === 0) continue;
+    const injected: RouteChain = heads.map((raw) => ({
+      // A prefer entry is the full catalogue model id (ids contain slashes,
+      // e.g. "moonshotai/kimi-k3"); empty provider = id-only match in findModel.
+      provider: "",
+      model: raw,
+      explicit: true,
+    }));
+    const headModels = new Set(injected.map((target) => target.model));
+    config.routes[tier] = [...injected, ...config.routes[tier].filter((target) => !headModels.has(target.model))];
+  }
+  return config;
+}
+
 export interface ConfigLoadResult {
   config: JevRouterConfig;
   /** Validation problems found while loading; empty when clean. */
@@ -716,9 +893,12 @@ export function resolveConfig(patch: unknown, env: EnvSource = process.env): Con
   if (patch) config = merge(config, patch);
 
   const envResult = applyEnvOverrides(config, env);
+  // L1+L2 composition runs last so an env-selected profile shapes the bands:
+  // facts slice for non-written tiers → prefer heads → deny/allow on the rest.
+  const resolved = applyModelPolicy(envResult.config);
   return {
-    config: envResult.config,
-    warnings: [...envResult.warnings, ...invariantWarnings(envResult.config)],
+    config: resolved,
+    warnings: [...envResult.warnings, ...invariantWarnings(resolved)],
     envOverrides: envResult.applied,
   };
 }

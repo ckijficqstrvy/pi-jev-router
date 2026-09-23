@@ -179,7 +179,7 @@ single provider id. Four capability tiers, each an ordered fallback chain:
 
 | Tier | Order tried | Tier thinking default* |
 | --- | --- | --- |
-| `quick` | `~z-ai/glm-flash-latest` → `xiaomi/mimo-v2.6-flash` | `off` |
+| `quick` | `xiaomi/mimo-v2.6-flash` → `~z-ai/glm-flash-latest` | `off` |
 | `standard` | `xiaomi/mimo-v2.6-pro` | `low` |
 | `high` | `~z-ai/glm-latest` → `moonshotai/kimi-k3` | `medium` |
 | `premium` | `openai/gpt-6-sol` → `~z-ai/glm-latest` | `high` |
@@ -188,7 +188,9 @@ single provider id. Four capability tiers, each an ordered fallback chain:
 level is judged per task by Jev's fifth question.
 
 Model picks follow a **no-first-tier-flagships budget** (2026-09): `quick` runs
-`~z-ai/glm-flash-latest` (AA ≈42) over mimo-flash; `high` runs `~z-ai/glm-latest`
+`xiaomi/mimo-v2.6-flash` (cheapest + same family as `standard`; quick-tier
+tasks are low-stakes, so the index gap matters least here) with
+`~z-ai/glm-flash-latest` (AA ≈42) as fallback; `high` runs `~z-ai/glm-latest`
 (GLM-5.3 ≈45, agentic-terminal reputation) with `moonshotai/kimi-k3` (1M ctx,
 Frontend Arena #1) as fallback; `premium` runs `openai/gpt-6-sol` ($2/$10 — a
 fifth of GPT-6 Astra — and Terminal-Bench 4.0 43%, the strongest non-flagship
@@ -439,6 +441,8 @@ Later sources win:
 | `JEV_ROUTER_CACHE_MAX_PENALTY_USD` | `cache.maxPenaltyUsd` | USD amount ≥ 0 |
 | `JEV_ROUTER_CACHE_BYPASS_TIER_DELTA` | `cache.bypassTierDelta` | integer ≥ 0 |
 | `JEV_ROUTER_KIND_MIN_TIER` | `kindMinimumTier` entries | comma-separated `kind=tier` pairs, e.g. `plan=high,review=high` |
+| `JEV_ROUTER_PROFILE` | `profile` | `cheap`, `balanced`, `quality` |
+| `JEV_ROUTER_AUTO_ROUTES` | `autoRoutes` | boolean |
 
 `routes` and `kindModels` are lists of model specs — structured data belongs in
 config.json, so they are deliberately not environment-reachable.
@@ -483,6 +487,63 @@ pressure = max(today ÷ dailyUsd, month ÷ monthlyUsd)
 The defaults are `$5/day` and `$100/month`. Set a cap to `0` to explicitly
 disable that dimension (omitting it keeps the default). Caps are policy, not a
 hard stop — they redirect routing, they do not block turns.
+
+## Budget profiles, ceilings & four-layer model policy
+
+Model picking is not one hardcoded table — it is four layers, highest priority
+first (the same precedence pattern as the thinking resolution):
+
+| Layer | What lives there | Who writes it |
+| --- | --- | --- |
+| L3 explicit | `routes` / `kindModels` in config.json — **never filtered** by policy | you |
+| L2 policy | `profile`, `ceilings`, `deny`, `allowProviders`, `prefer` | you (1–3 lines) |
+| L1 facts | `model-facts.json` — dated capability scores + price snapshots | refreshed each release |
+| L0 mechanism | demand composition, guards, fallbacks (code) | the router |
+
+**Ceiling metric:** `input + 2×output` USD per million tokens (agent traffic
+writes plenty of output). Every tier gets an upper bound from the profile;
+bounds are contiguous, so a tier's implicit floor is the tier below's ceiling —
+the **price bands are disjoint by construction** (capability floors would not
+be: the strongest cheap model would otherwise saturate every tier). Within a
+band, models are ordered by the facts capability score; at decision time the
+band is re-checked against the model registry's **live price**, so stale facts
+prices fail open instead of mis-routing.
+
+| profile | quick | standard | high | premium |
+| --- | --- | --- | --- | --- |
+| `cheap` | ≤1 | ≤3 | ≤10 | ≤25 |
+| `balanced` (default) | ≤1.5 | ≤5 | ≤15 | ≤44 |
+| `quality` | ≤2 | ≤10 | ≤44 | ∞ |
+
+```json
+{
+  "profile": "cheap",
+  "ceilings": { "high": 8 },
+  "deny": ["*claude-opus*", "*fable*", "*astra*"],
+  "allowProviders": ["openrouter"],
+  "prefer": { "premium": ["openai/gpt-6-sol"] }
+}
+```
+
+- `deny` / `allowProviders` — glob patterns over `provider/model` (or a bare
+  model id); they filter **derived** chains only. A model you wrote yourself is
+  your decision and survives its own deny — explicit beats policy, always.
+- `prefer` — heads injected at the top of a tier chain, explicit (never
+  filtered). `autoRoutes: false` keeps the authored default chains instead of
+  the facts-derived ones.
+
+**Kind specialists** are curated (domain fit is not derivable from a composite
+score), and their `minTier` rungs are checked against that tier's band at
+decision time — under a tight profile a specialist rung quietly goes dormant
+and the tier chain carries the turn (budget honesty). Raise the band or write
+the rung into config.json to pin it.
+
+**Refreshing model facts** (once per release, or when the landscape moves):
+re-check the [Artificial Analysis intelligence index](https://artificialanalysis.ai/leaderboards/models),
+[OpenRouter rankings](https://openrouter.ai/rankings) and Terminal-Bench /
+community leaderboards; update `extensions/pi-jev-model-router/model-facts.json`
+(`capability`, `price`, `generatedAt`, `source`) and run `npm test` — the schema
+and band-slicing tests pin the shape.
 
 ## Prompt-cache awareness
 
@@ -573,6 +634,12 @@ new `$5/day` / `$100/month` budget defaults now apply unless you set your own.
 | `kindMinimumTier` | see above | Per-kind floor tier |
 | `budget` | `$5/day`, `$100/month` | Spend policy (`0` disables a cap) |
 | `cache` | `aware`, cap `$0.05`, deadband `0.25` | Prompt-cache-aware switching |
+| `profile` | `"balanced"` | Budget profile supplying the per-tier price bands |
+| `ceilings` | profile bands | Per-tier ceiling overrides (`$/M`, `input+2×output`); `null` = ∞ |
+| `deny` | `[]` | Glob patterns removed from derived chains (explicit entries survive) |
+| `allowProviders` | `[]` | Non-empty → only these providers survive in derived chains |
+| `prefer` | `{}` | Heads injected per tier; explicit, never filtered |
+| `autoRoutes` | `true` | Derive non-written tiers from `model-facts.json`; `false` = authored defaults |
 
 ## Failure behaviour
 

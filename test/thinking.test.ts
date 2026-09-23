@@ -220,6 +220,55 @@ async function main(): Promise<void> {
     assert.equal(ledger.jev.requests, 2, "increments once per prompt, never per question");
   });
 
+  await test("price band: over-ceiling candidates fall through; explicit entries are never blocked", () => {
+    const config: JevRouterConfig = {
+      ...DEFAULT_CONFIG,
+      ceilings: { quick: 1 }, // $ in+2out cap for the quick band
+      routes: {
+        quick: [
+          { provider: "x", model: "pricey" },
+          { provider: "x", model: "cheap" },
+        ],
+        standard: [{ provider: "x", model: "std" }],
+        high: [{ provider: "x", model: "hi" }],
+        premium: [{ provider: "x", model: "prem" }],
+      },
+      kindModels: {}, // no specialists: exercise the tier chain only
+    };
+    const models = [
+      { provider: "x", id: "pricey", cost: { input: 100, output: 100, cacheRead: 10, cacheWrite: 0 } }, // 300
+      { provider: "x", id: "cheap", cost: { input: 0.1, output: 0.1, cacheRead: 0.01, cacheWrite: 0 } }, // 0.3
+      { provider: "x", id: "std", cost: { input: 1, output: 1, cacheRead: 0.1, cacheWrite: 0 } }, // 3 ≤ standard 5
+      { provider: "x", id: "hi", cost: { input: 1, output: 1, cacheRead: 0.1, cacheWrite: 0 } },
+      { provider: "x", id: "prem", cost: { input: 1, output: 1, cacheRead: 0.1, cacheWrite: 0 } },
+    ];
+    const spend = { today: 0, month: 0, pressure: 0 };
+    const d = decide(analysis({ kind: "chat", complexity: 0, budgetIntensity: 0, deepReasoning: 0 }), config, {
+      models,
+      spend,
+    });
+    assert.ok(d);
+    assert.equal(d.model?.id, "cheap", "pricy head skipped by the quick band");
+    assert.ok(d.notes.some((n) => /price band/.test(n)), "the skip is visible in the decision trace");
+
+    // explicit bypasses the band
+    const explicitConfig = {
+      ...config,
+      routes: {
+        quick: [{ provider: "x", model: "pricey", explicit: true }],
+        standard: [{ provider: "x", model: "std" }],
+        high: [{ provider: "x", model: "hi" }],
+        premium: [{ provider: "x", model: "prem" }],
+      },
+    };
+    const d2 = decide(analysis({ kind: "chat", complexity: 0, budgetIntensity: 0, deepReasoning: 0 }), explicitConfig, {
+      models,
+      spend,
+    });
+    assert.ok(d2);
+    assert.equal(d2.model?.id, "pricey", "explicit entries ignore the band");
+  });
+
   await test("decide() regression: demand/tier mapping unchanged", () => {
     const models = [
       { provider: "openrouter", id: "xiaomi/mimo-v2.6-flash" },

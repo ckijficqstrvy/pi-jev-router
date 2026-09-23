@@ -1,5 +1,5 @@
 import type { JevRouterConfig, RouteChain, RouteTarget, ThinkingLevel, Tier } from "./config";
-import { TIER_THINKING, TIERS } from "./config";
+import { ceilingFor, TIER_THINKING, TIERS } from "./config";
 import type { SpendSnapshot } from "./budget";
 import { formatUsd } from "./budget";
 import type { RouteAnalysis } from "./jev";
@@ -260,14 +260,48 @@ export function decide(
   const kindChain = (config.kindModels[analysis.kind] ?? [])
     .filter((target) => tierIndex(target.minTier) <= index)
     .sort((a, b) => tierIndex(b.minTier) - tierIndex(a.minTier));
-  const ordered: RouteTarget[] = [...kindChain, ...config.routes[TIERS[index]]];
+
+  type Candidate = { target: RouteTarget; home: Tier };
+  const ordered: Candidate[] = kindChain.map((target) => ({ target, home: TIERS[tierIndex(target.minTier)] }));
+  const pushTier = (t: number): void => {
+    for (const target of config.routes[TIERS[t]]) ordered.push({ target, home: TIERS[t] });
+  };
+  pushTier(index);
   for (let offset = 1; offset < TIERS.length; offset += 1) {
-    if (index - offset >= 0) ordered.push(...config.routes[TIERS[index - offset]]);
-    if (index + offset < TIERS.length) ordered.push(...config.routes[TIERS[index + offset]]);
+    if (index - offset >= 0) pushTier(index - offset);
+    if (index + offset < TIERS.length) pushTier(index + offset);
   }
 
-  const available = firstAvailable(options.models, ordered);
+  // Price band: non-explicit candidates must sit within their home tier's
+  // ceiling, re-checked against the LIVE registry price (stale facts prices
+  // fail open either way). Explicit config entries are never blocked.
+  const bandSkipped: string[] = [];
+  const withinBand = (candidate: Candidate): boolean => {
+    if (candidate.target.explicit) return true;
+    const cap = ceilingFor(config, candidate.home);
+    if (cap === null) return true;
+    const priced = findModel(options.models, candidate.target)?.cost;
+    if (!priced) return true; // unknown pricing never blocks (fail-open)
+    if (priced.input + 2 * priced.output <= cap) return true;
+    bandSkipped.push(candidate.target.model);
+    return false;
+  };
+
+  let available: { target: RouteTarget; model: AvailableModel } | undefined;
+  for (const candidate of ordered) {
+    if (!withinBand(candidate)) continue;
+    const model = findModel(options.models, candidate.target);
+    if (model) {
+      available = { target: candidate.target, model };
+      break;
+    }
+  }
   if (!available) return undefined;
+  if (bandSkipped.length > 0) {
+    notes.push(
+      `price band skipped ${bandSkipped.length} pricier candidate(s): ${[...new Set(bandSkipped)].slice(0, 3).join(", ")}`,
+    );
+  }
 
   const currentIndex = options.current?.index;
   const currentModel = options.current?.model;

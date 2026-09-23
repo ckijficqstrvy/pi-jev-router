@@ -13,7 +13,7 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { apiKeySourceLabel, loadConfigDetailed, resolveApiKey, STATE_FILE, TIERS, type JevRouterConfig, type ThinkingLevel } from "./config";
+import { apiKeySourceLabel, ceilingFor, loadConfigDetailed, resolveApiKey, STATE_FILE, TIERS, type JevRouterConfig, type ThinkingLevel } from "./config";
 import {
   formatUsd,
   loadLedger,
@@ -763,6 +763,10 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
             `budget pressure: ${spend.pressure > 0 ? `${(spend.pressure * 100).toFixed(0)}%` : "no caps set"}`,
             `cache-aware: ${runtime.config.cache.aware ? `on (cap ${formatUsd(runtime.config.cache.maxPenaltyUsd)}, deadband ${runtime.config.cache.deadband})` : "off"}`,
             `built-in models: ${runtime.config.useDefaultModels ? "on" : "off (config-only)"}`,
+            `profile: ${runtime.config.profile} · auto-routes: ${runtime.config.autoRoutes ? "on" : "off"} · ceilings ${TIERS.map((t) => {
+              const cap = ceilingFor(runtime.config, t);
+              return `${t[0]}≤${cap === null ? "∞" : cap}`;
+            }).join(" ")}`,
             `env overrides: ${runtime.envOverrides.length > 0 ? runtime.envOverrides.join(", ") : "none"}`,
             ...(runtime.configWarnings.length > 0
               ? ["", "config warnings:", ...runtime.configWarnings.map((warning) => `  ! ${warning}`)]

@@ -28,10 +28,73 @@ async function test(name: string, fn: () => void | Promise<void>): Promise<void>
 
 async function main(): Promise<void> {
   await test("no patch, no env → defaults, no warnings, no overrides", () => {
-    const result = resolveConfig(undefined, {});
-    assert.deepEqual(result.config, DEFAULT_CONFIG);
+    // autoRoutes off → the authored default chains: strict equality holds.
+    const result = resolveConfig(undefined, { JEV_ROUTER_AUTO_ROUTES: "0" });
+    assert.deepEqual({ ...result.config, autoRoutes: true }, DEFAULT_CONFIG);
     assert.deepEqual(result.warnings, []);
-    assert.deepEqual(result.envOverrides, []);
+    assert.deepEqual(result.envOverrides, ["JEV_ROUTER_AUTO_ROUTES"]);
+  });
+
+  await test("autoRoutes (default) derives tiers from model facts in price bands", () => {
+    const { config } = resolveConfig(undefined, {});
+    // balanced bands ($ in+2out): quick ≤1.5, standard ≤5, high ≤15, premium ≤44
+    assert.equal(config.routes.quick[0]?.model, "~z-ai/glm-flash-latest"); // 42 @ 0.57
+    assert.equal(config.routes.standard[0]?.model, "xiaomi/mimo-v2.6-pro"); // 46 @ 2.17
+    assert.equal(config.routes.high[0]?.model, "~x-ai/grok-latest"); // 46 @ 11.20
+    assert.equal(config.routes.premium[0]?.model, "~anthropic/claude-opus-latest"); // 58 @ 44
+    // disjoint by price: sol (48 @ 22) can only live in premium, never in high (≤15)
+    assert.ok(!config.routes.high.some((t) => t.model === "openai/gpt-6-sol"));
+    assert.ok(config.routes.premium.some((t) => t.model === "openai/gpt-6-sol"));
+    // capability-descending inside each band
+    for (const chain of Object.values(config.routes)) {
+      assert.ok(chain.length > 0, "every balanced band has members");
+    }
+  });
+
+  await test("deny strips flagships from derived chains; explicit config survives its own deny", () => {
+    const denied = resolveConfig({ deny: ["*claude-opus*", "*astra*"] }, {}).config;
+    assert.equal(denied.routes.premium[0]?.model, "openai/gpt-6-sol");
+    assert.ok(!Object.values(denied.routes).flat().some((t) => /opus|astra/.test(t.model)));
+    // L3 explicit beats policy.
+    const pinned = resolveConfig(
+      { deny: ["*opus*"], routes: { quick: [{ provider: "openrouter", model: "~anthropic/claude-opus-latest" }] } },
+      {},
+    ).config;
+    assert.equal(pinned.routes.quick[0]?.model, "~anthropic/claude-opus-latest");
+    assert.equal(pinned.routes.quick[0]?.explicit, true);
+  });
+
+  await test("profile changes the bands (cheap premium = sol, balanced premium = opus)", () => {
+    const cheap = resolveConfig({ profile: "cheap" }, {}).config;
+    assert.equal(cheap.routes.premium[0]?.model, "openai/gpt-6-sol"); // ≤25 excludes opus @ 44
+    const balanced = resolveConfig({}, {}).config;
+    assert.equal(balanced.routes.premium[0]?.model, "~anthropic/claude-opus-latest");
+  });
+
+  await test("prefer injects an explicit head that beats deny", () => {
+    const config = resolveConfig({ deny: ["*kimi*"], prefer: { high: ["moonshotai/kimi-k3"] } }, {}).config;
+    assert.equal(config.routes.high[0]?.model, "moonshotai/kimi-k3");
+    assert.equal(config.routes.high[0]?.explicit, true);
+  });
+
+  await test("allowProviders keeps only that provider's models", () => {
+    const config = resolveConfig({ allowProviders: ["anthropic"] }, {}).config;
+    // every shipped fact is routed via openrouter → derived chains empty
+    assert.deepEqual(config.routes.quick, []);
+    assert.deepEqual(config.routes.premium, []);
+  });
+
+  await test("shipped model facts are valid and capability-ranked", async () => {
+    const { MODEL_FACTS, factsValid, rankedFacts, blendedOf } = await import(
+      "../extensions/pi-jev-model-router/facts"
+    );
+    assert.ok(factsValid(MODEL_FACTS));
+    assert.ok(MODEL_FACTS.generatedAt.length >= 10);
+    const ranked = rankedFacts(MODEL_FACTS);
+    for (let i = 1; i < ranked.length; i += 1) {
+      assert.ok(ranked[i - 1].capability >= ranked[i].capability, "capability descending");
+    }
+    assert.equal(blendedOf({ input: 2, output: 10 }), 22, "ceiling metric");
   });
 
   await test("env wins over config.json and reports what it overrode", () => {
@@ -245,6 +308,8 @@ async function main(): Promise<void> {
       JEV_ROUTER_CACHE_DEADBAND: "0.4",
       JEV_ROUTER_CACHE_MAX_PENALTY_USD: "0.01",
       JEV_ROUTER_CACHE_BYPASS_TIER_DELTA: "5",
+      JEV_ROUTER_PROFILE: "quality",
+      JEV_ROUTER_AUTO_ROUTES: "false",
     }).config;
     assert.deepEqual(config, {
       ...DEFAULT_CONFIG,
@@ -262,6 +327,8 @@ async function main(): Promise<void> {
       kindModels: {},
       budget: { monthlyUsd: 1, softRatio: 0.2, hardRatio: 0.3 },
       cache: { aware: false, deadband: 0.4, maxPenaltyUsd: 0.01, bypassTierDelta: 5 },
+      profile: "quality",
+      autoRoutes: false,
     });
   });
 

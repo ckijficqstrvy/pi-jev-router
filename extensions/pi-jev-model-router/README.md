@@ -154,7 +154,7 @@ forms lives in the repository README.
   "stickiness": true,
   "budget": { "dailyUsd": 5, "monthlyUsd": 100, "softRatio": 0.7, "hardRatio": 0.9 },
   "routes": {
-    "quick":    [{ "provider": "openrouter", "model": "~z-ai/glm-flash-latest" }],
+    "quick":    [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash" }],
     "standard": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro" }],
     "high":     [{ "provider": "openrouter", "model": "~z-ai/glm-latest" }],
     "premium":  [{ "provider": "openrouter", "model": "openai/gpt-6-sol" }]
@@ -188,6 +188,19 @@ clamps per model, and the decision entry records what was **actually applied**
 after clamping, beside the resolved and judged values. In `notify` mode a
 suggested switch still mutates nothing: the entry and notification show the
 resolved level annotated `not applied (notify mode)`.
+
+### Budget profiles & model policy
+
+Four layers, highest wins: explicit `routes`/`kindModels` (never filtered) →
+policy (`profile`/`ceilings`/`deny`/`allowProviders`/`prefer`) →
+`model-facts.json` (dated capability + price snapshot) → code. One line —
+`"profile": "cheap"` — sets every tier's price band (`input+2×output` $/M:
+cheap 1/3/10/25, balanced 1.5/5/15/44, quality 2/10/44/∞); bands are
+disjoint, capability ranks inside a band, live registry prices re-check at
+decision time. `deny: ["*opus*"]` strips flagships from derived chains; a
+model you write yourself always survives its own deny. `autoRoutes: false`
+keeps the authored default chains. See the repository README for the
+four-layer table and the model-facts refresh procedure.
 
 ### Two axes of routing
 

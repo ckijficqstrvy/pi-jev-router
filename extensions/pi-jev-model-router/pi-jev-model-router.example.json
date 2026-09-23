@@ -7,6 +7,10 @@
   "timeoutMs": 3500,
   "confidenceThreshold": 0.34,
   "stickiness": true,
+  "profile": "balanced",
+  "autoRoutes": true,
+  "deny": ["*claude-opus*", "*fable*", "*astra*"],
+  "ceilings": { "premium": 25 },
   "budget": {
     "dailyUsd": 5,
     "monthlyUsd": 100,
@@ -21,8 +25,8 @@
   },
   "routes": {
     "quick":    [
-      { "provider": "openrouter", "model": "~z-ai/glm-flash-latest" },
-      { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash" }
+      { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash" },
+      { "provider": "openrouter", "model": "~z-ai/glm-flash-latest" }
     ],
     "standard": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro" }],
     "high":     [
