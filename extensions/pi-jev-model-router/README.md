@@ -154,9 +154,9 @@ forms lives in the repository README.
   "stickiness": true,
   "budget": { "dailyUsd": 5, "monthlyUsd": 100, "softRatio": 0.7, "hardRatio": 0.9 },
   "routes": {
-    "quick":    [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash" }],
+    "quick":    [{ "provider": "openrouter", "model": "~z-ai/glm-flash-latest" }],
     "standard": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro" }],
-    "high":     [{ "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest" }],
+    "high":     [{ "provider": "openrouter", "model": "openai/gpt-6-astra" }],
     "premium":  [{ "provider": "openrouter", "model": "~anthropic/claude-opus-latest" }]
   },
   "kindModels": {

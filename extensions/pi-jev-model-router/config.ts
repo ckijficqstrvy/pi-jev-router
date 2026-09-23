@@ -147,9 +147,20 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
   // judgment decide" (with TIER_THINKING as fallback). Write thinkingLevel in
   // config.json to pin a route.
   routes: {
-    quick: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-flash" }],
+    // Refreshed 2026-09 against the Artificial Analysis intelligence index:
+    // glm-flash ~42 vs mimo-flash ~22–25 → mimo-flash demoted to fallback.
+    quick: [
+      { provider: "openrouter", model: "~z-ai/glm-flash-latest" },
+      { provider: "openrouter", model: "xiaomi/mimo-v2.6-flash" },
+    ],
     standard: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-pro" }],
-    high: [{ provider: "openrouter", model: "~anthropic/claude-sonnet-latest" }],
+    // gpt-6-astra 46–53 vs sonnet-5 23–38 on the same index: the old high
+    // pick was scoring below the standard tier. Exact slug, not ~latest:
+    // an alias jump must not silently change this tier's price class.
+    high: [
+      { provider: "openrouter", model: "openai/gpt-6-astra" },
+      { provider: "openrouter", model: "~anthropic/claude-sonnet-latest" },
+    ],
     premium: [{ provider: "openrouter", model: "~anthropic/claude-opus-latest" }],
   },
   kindModels: {
@@ -162,10 +173,17 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
     implement: [
       { provider: "openrouter", model: "xiaomi/mimo-v2.6-pro", minTier: "standard" },
       { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "standard" },
+      // Escalation rungs: decide() ranks eligible specialists by minTier
+      // (closest to the chosen tier first), so high-demand implementation
+      // climbs instead of staying on the standard-tier specialist.
+      { provider: "openrouter", model: "openai/gpt-6-astra", minTier: "high" },
+      { provider: "openrouter", model: "~anthropic/claude-opus-latest", minTier: "premium" },
     ],
     debug: [
       { provider: "openrouter", model: "xiaomi/mimo-v2.6-pro", minTier: "standard" },
+      { provider: "openrouter", model: "openai/gpt-6-astra", minTier: "high" },
       { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "high" },
+      { provider: "openrouter", model: "~anthropic/claude-opus-latest", minTier: "premium" },
     ],
     refactor: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-pro", minTier: "standard" }],
     // Review and audit: strongest reviewers only.

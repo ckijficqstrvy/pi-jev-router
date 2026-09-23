@@ -226,6 +226,8 @@ async function main(): Promise<void> {
       { provider: "openrouter", id: "xiaomi/mimo-v2.6-pro" },
       { provider: "openrouter", id: "~anthropic/claude-sonnet-latest" },
       { provider: "openrouter", id: "~anthropic/claude-opus-latest" },
+      { provider: "openrouter", id: "~z-ai/glm-flash-latest" },
+      { provider: "openrouter", id: "openai/gpt-6-astra" },
     ];
     const spend = { today: 0, month: 0, pressure: 0, dailyCap: 5, monthlyCap: 100 };
 
@@ -233,10 +235,10 @@ async function main(): Promise<void> {
     const d1 = decide(analysis({ complexity: 1.5, budgetIntensity: 1.5 }), config, { models, spend });
     assert.ok(d1);
     assert.equal(d1.tier, "high");
-    // Pre-existing kind-specialist behaviour (decide() untouched by B+C): at
-    // equal minTier the earlier chain entry wins, so implement prefers the
-    // coding specialist over the generic high-tier chain.
-    assert.equal(d1.model?.id, "xiaomi/mimo-v2.6-pro");
+    // Escalation rung: at high demand the kind chain's highest eligible
+    // minTier wins, so implement now reaches gpt-6-astra instead of always
+    // staying on the standard-tier specialist.
+    assert.equal(d1.model?.id, "openai/gpt-6-astra");
     assert.equal(d1.kindSpecialised, true);
     assert.equal(d1.demandScore, 1.5);
 

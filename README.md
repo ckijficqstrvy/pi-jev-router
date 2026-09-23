@@ -179,13 +179,20 @@ single provider id. Four capability tiers, each an ordered fallback chain:
 
 | Tier | Order tried | Tier thinking default* |
 | --- | --- | --- |
-| `quick` | `xiaomi/mimo-v2.6-flash` | `off` |
+| `quick` | `~z-ai/glm-flash-latest` → `xiaomi/mimo-v2.6-flash` | `off` |
 | `standard` | `xiaomi/mimo-v2.6-pro` | `low` |
-| `high` | `~anthropic/claude-sonnet-latest` | `medium` |
+| `high` | `openai/gpt-6-astra` → `~anthropic/claude-sonnet-latest` | `medium` |
 | `premium` | `~anthropic/claude-opus-latest` | `high` |
 
 \* Fallback rung (last in line — see **Thinking levels** below); by default the
 level is judged per task by Jev's fifth question.
+
+Model picks refreshed against the Artificial Analysis intelligence index
+(2026-09): `glm-flash` ≈42 and `gpt-6-astra` 46–53 replaced weaker picks at
+`quick`/`high` (the old `high` pick scored *below* the `standard` tier's 46),
+and the demoted models stay in the chain as fallbacks. `openai/gpt-6-astra` is
+pinned as an exact slug rather than `~openai/gpt-astra-latest` on purpose: an
+alias jump must not silently change the tier's price class.
 
 Plus kind specialists, tried before the tier chain when the chosen tier is high
 enough (`minTier`):
@@ -193,8 +200,8 @@ enough (`minTier`):
 | Kind | Specialists |
 | --- | --- |
 | `plan` | `~anthropic/claude-opus-latest` (≥premium) → `~anthropic/claude-sonnet-latest` (≥high) |
-| `implement` | `xiaomi/mimo-v2.6-pro` (≥standard) → `~anthropic/claude-sonnet-latest` (≥standard) |
-| `debug` | `xiaomi/mimo-v2.6-pro` (≥standard) → `~anthropic/claude-sonnet-latest` (≥high) |
+| `implement` | `xiaomi/mimo-v2.6-pro` (≥standard) → `~anthropic/claude-sonnet-latest` (≥standard) → `openai/gpt-6-astra` (≥high) → `~anthropic/claude-opus-latest` (≥premium) |
+| `debug` | `xiaomi/mimo-v2.6-pro` (≥standard) → `openai/gpt-6-astra` (≥high) → `~anthropic/claude-sonnet-latest` (≥high) → `~anthropic/claude-opus-latest` (≥premium) |
 | `refactor` | `xiaomi/mimo-v2.6-pro` (≥standard) |
 | `review` | `~anthropic/claude-opus-latest` (≥high) → `~anthropic/claude-sonnet-latest` (≥standard) |
 | `research` | `~anthropic/claude-sonnet-latest` (≥standard) → `xiaomi/mimo-v2.6-pro` (≥standard) |
