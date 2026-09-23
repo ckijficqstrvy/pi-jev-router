@@ -246,6 +246,11 @@ switches instead of making them freely:
 - `bypassTierDelta` — a jump this large still switches (genuine capability change)
 - same-tier specialist swaps are priced identically, since they are still model
   changes
+- `cooldownSeconds` — after every applied switch, only quality-critical jumps
+  (`bypassTierDelta`) or hard-ratio budget downgrades may switch again for that
+  long; stops alternating easy/hard prompts from flapping between models
+  (`0` = off). `/jev-router` shows `switches: N · estimated cache miss ≈ $X`
+  so the cost of routing stays visible.
 
 Set `cache.aware: false` to switch unconditionally. The estimate is skipped when
 pricing is unknown, so it never blocks on guesses.

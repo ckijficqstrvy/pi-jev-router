@@ -28,6 +28,7 @@ import {
   decide,
   describeDecision,
   describeThinking,
+  estimateCachePenaltyUsd,
   findModel,
   firstAvailable,
   resolveThinking,
@@ -53,6 +54,11 @@ interface Runtime {
   previousModelKey?: string;
   appliedTierIndex?: number;
   lastEntrySignature?: string;
+  /** Session clock of the last successful model switch (cooldown input). */
+  lastSwitchAt?: number;
+  /** Switches applied this session and the cache-miss cost they are expected to have paid. */
+  switchCount: number;
+  switchPenaltyUsd: number;
 }
 
 const ACK_PATTERN = /^(y|yes|yeah|yep|ok|okay|sure|continue|go on|go ahead|do it|proceed|nice|thanks|thank you|ty)[.!]?$/i;
@@ -322,6 +328,7 @@ async function analyse(
     models: runtime.models,
     spend,
     contextTokens,
+    lastSwitchAt: runtime.lastSwitchAt,
     current: {
       index: tierForModel(activeKey, config),
       model: runtime.models.find((model) => `${model.provider}/${model.id}` === activeKey),
@@ -433,11 +440,27 @@ async function applyDecision(
   if (previous && previous !== `${model.provider}/${model.id}`) runtime.previousModelKey = previous;
   const applied = applyThinking(thinking.level);
 
+  // Transparent switch economics: what this hop is expected to cost in cache
+  // miss (0 when pricing is unknown — never shown as a false "free").
+  const contextTokensNow = ctx.getContextUsage?.()?.tokens ?? 0;
+  const prevAvail = previous ? runtime.models.find((m) => `${m.provider}/${m.id}` === previous) : undefined;
+  const nextAvail = runtime.models.find((m) => m.provider === model.provider && m.id === model.id);
+  const missUsd = prevAvail && nextAvail ? estimateCachePenaltyUsd(contextTokensNow, prevAvail, nextAvail) : 0;
+  if (missUsd > 0) decision.notes.push(`estimated cache miss ≈ ${formatUsd(missUsd)}`);
+  runtime.lastSwitchAt = Date.now();
+  runtime.switchCount += 1;
+  runtime.switchPenaltyUsd += missUsd;
+
   runtime.appliedTierIndex = decision.tierIndex;
   runtime.lastDecision = decision;
   runtime.lastAnalysis = analysis;
   statusLine(ctx, runtime);
-  notify(ctx, `${headline}\n${detail}\n${describeThinking(thinking, applied)}`, "info");
+  notify(
+    ctx,
+    `${headline}\n${detail}\n${describeThinking(thinking, applied)}` +
+      (missUsd > 0 ? `\ncache miss ≈ ${formatUsd(missUsd)} · session ≈ ${formatUsd(runtime.switchPenaltyUsd)}` : ""),
+    "info",
+  );
   appendDecisionEntry(analysis, decision, "switched", runtime, thinking, applied);
   return { action: "switched", message: `${headline}` };
 }
@@ -504,6 +527,8 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     configWarnings: initial.warnings,
     envOverrides: initial.envOverrides,
     ledger: loadLedger(STATE_FILE),
+    switchCount: 0,
+    switchPenaltyUsd: 0,
     models: [],
   };
 
@@ -720,8 +745,22 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
             notify(ctx, `previous model not found: ${runtime.previousModelKey}`, "warning");
             return;
           }
+          const prevKey = currentModelKey(ctx);
+          const prevAvail = prevKey ? runtime.models.find((m) => `${m.provider}/${m.id}` === prevKey) : undefined;
+          const nextAvail = runtime.models.find((m) => m.provider === model.provider && m.id === model.id);
           await switchModel(model);
-          notify(ctx, `reverted to ${runtime.previousModelKey}`, "info");
+          runtime.lastSwitchAt = Date.now();
+          runtime.switchCount += 1;
+          const missUsd =
+            prevAvail && nextAvail
+              ? estimateCachePenaltyUsd(ctx.getContextUsage?.()?.tokens ?? 0, prevAvail, nextAvail)
+              : 0;
+          runtime.switchPenaltyUsd += missUsd;
+          notify(
+            ctx,
+            `reverted to ${runtime.previousModelKey}${missUsd > 0 ? ` · cache miss ≈ ${formatUsd(missUsd)}` : ""}`,
+            "info",
+          );
           return;
         }
         case "why": {
@@ -767,6 +806,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
               const cap = ceilingFor(runtime.config, t);
               return `${t[0]}≤${cap === null ? "∞" : cap}`;
             }).join(" ")}`,
+            `switches: ${runtime.switchCount} this session · estimated cache miss ≈ ${formatUsd(runtime.switchPenaltyUsd)}`,
             `env overrides: ${runtime.envOverrides.length > 0 ? runtime.envOverrides.join(", ") : "none"}`,
             ...(runtime.configWarnings.length > 0
               ? ["", "config warnings:", ...runtime.configWarnings.map((warning) => `  ! ${warning}`)]

@@ -149,6 +149,10 @@ export interface DecideOptions {
   contextTokens?: number;
   /** The model in use right now, so we never pay a cache miss for a marginal change. */
   current?: { index?: number; model?: AvailableModel };
+  /** When the last model switch happened (session clock), for cache.cooldownSeconds. */
+  lastSwitchAt?: number;
+  /** Injectable clock for cooldown tests; defaults to Date.now(). */
+  now?: number;
 }
 
 /**
@@ -325,16 +329,58 @@ export function decide(
     index = effectiveIndex;
   }
 
+  const differentModel =
+    currentIndex !== undefined &&
+    currentModel !== undefined &&
+    (available.model.provider !== currentModel.provider || available.model.id !== currentModel.id);
+
+  // Temporal hysteresis: the demand-space deadband cannot stop alternating
+  // easy/hard prompts from flapping — each hop pays a fresh cache miss. After
+  // a switch, hold for cooldownSeconds unless the move is quality-critical
+  // (bypassTierDelta) or a hard-ratio budget downgrade (where staying put
+  // costs more per turn than the miss).
+  if (
+    config.cache.cooldownSeconds > 0 &&
+    differentModel &&
+    currentIndex !== undefined &&
+    currentModel &&
+    options.lastSwitchAt !== undefined
+  ) {
+    const now = options.now ?? Date.now();
+    const elapsedMs = now - options.lastSwitchAt;
+    if (elapsedMs < config.cache.cooldownSeconds * 1000) {
+      const delta = index - currentIndex;
+      const hardDowngrade = downgraded && spend.pressure > 0 && spend.pressure >= config.budget.hardRatio;
+      if (delta < config.cache.bypassTierDelta && !hardDowngrade) {
+        const remainS = Math.ceil((config.cache.cooldownSeconds * 1000 - elapsedMs) / 1000);
+        notes.push(`cooldown: ${remainS}s since the last switch — keeping the warm cache`);
+        return {
+          desiredTier: TIERS[desiredIndex],
+          tier: TIERS[currentIndex],
+          target: targetForModel(config, currentModel),
+          model: currentModel,
+          tierIndex: currentIndex,
+          demandScore: demand,
+          budgetPressure: spend.pressure,
+          downgraded: false,
+          lowConfidenceFallback,
+          kindSpecialised: false,
+          held: true,
+          reason:
+            `${analysis.kind} · complexity ${analysis.complexity.toFixed(2)}/3 · ` +
+            `capability ${analysis.budgetIntensity.toFixed(2)}/3 · reasoning ${analysis.deepReasoning.toFixed(2)}` +
+            ` → ${TIERS[desiredIndex]}, held on ${TIERS[currentIndex]} (cooldown)`,
+          notes,
+        };
+      }
+    }
+  }
+
   // Cache guard: a model switch discards the provider's prompt cache, so the next
   // request re-reads the whole prefix at full input price. Only pay that when the
   // move is worth it — a big upgrade for a hard task, a cheaper tier once demand
   // clears the current band, or a same-tier specialist swap that is cheap enough.
-  if (
-    config.cache.aware &&
-    currentIndex !== undefined &&
-    currentModel &&
-    (available.model.provider !== currentModel.provider || available.model.id !== currentModel.id)
-  ) {
+  if (config.cache.aware && differentModel && currentIndex !== undefined && currentModel) {
     const delta = index - currentIndex;
     const penalty = estimateCachePenaltyUsd(options.contextTokens ?? 0, currentModel, available.model);
     const outsideBand =

@@ -123,6 +123,14 @@ export interface CacheConfig {
   maxPenaltyUsd: number;
   /** Tier jumps this large always switch, since they are quality-critical. */
   bypassTierDelta: number;
+  /**
+   * After a switch, refuse further non-exempt switches for this many seconds.
+   * Temporal hysteresis: the demand-space deadband alone cannot stop
+   * alternating easy/hard prompts from flapping — every hop pays a fresh
+   * cache miss. 0 = off (default). Exempt: big jumps (bypassTierDelta) and
+   * hard-ratio budget downgrades.
+   */
+  cooldownSeconds: number;
 }
 
 export interface JevRouterConfig {
@@ -275,6 +283,7 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
     deadband: 0.25,
     maxPenaltyUsd: 0.05,
     bypassTierDelta: 2,
+    cooldownSeconds: 0,
   },
 };
 
@@ -421,6 +430,13 @@ function merge(base: JevRouterConfig, patch: unknown): JevRouterConfig {
   }
   if (typeof cacheRaw.bypassTierDelta === "number" && Number.isFinite(cacheRaw.bypassTierDelta)) {
     cache.bypassTierDelta = cacheRaw.bypassTierDelta;
+  }
+  if (
+    typeof cacheRaw.cooldownSeconds === "number" &&
+    Number.isFinite(cacheRaw.cooldownSeconds) &&
+    cacheRaw.cooldownSeconds >= 0
+  ) {
+    cache.cooldownSeconds = cacheRaw.cooldownSeconds;
   }
   next.cache = cache;
 
@@ -690,6 +706,16 @@ const ENV_VARS: readonly EnvVarSpec[] = [
     expected: BOOL_EXPECTED,
     parse: (raw) => parseBool(raw) ?? INVALID,
     apply: (config, value) => assign(config, "autoRoutes", value as boolean),
+  },
+  {
+    name: "JEV_ROUTER_CACHE_COOLDOWN_SECONDS",
+    expected: "integer ≥ 0 (seconds; 0 disables)",
+    parse: (raw) => parseNumber(raw, { integer: true, min: 0 }) ?? INVALID,
+    apply: (config, value) => {
+      if (config.cache.cooldownSeconds === value) return false;
+      config.cache.cooldownSeconds = value as number;
+      return true;
+    },
   },
 ];
 

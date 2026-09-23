@@ -443,6 +443,7 @@ Later sources win:
 | `JEV_ROUTER_KIND_MIN_TIER` | `kindMinimumTier` entries | comma-separated `kind=tier` pairs, e.g. `plan=high,review=high` |
 | `JEV_ROUTER_PROFILE` | `profile` | `cheap`, `balanced`, `quality` |
 | `JEV_ROUTER_AUTO_ROUTES` | `autoRoutes` | boolean |
+| `JEV_ROUTER_CACHE_COOLDOWN_SECONDS` | `cache.cooldownSeconds` | integer ≥ 0 (seconds; 0 disables) |
 
 `routes` and `kindModels` are lists of model specs — structured data belongs in
 config.json, so they are deliberately not environment-reachable.
@@ -568,6 +569,18 @@ The router therefore gates switches instead of making them freely:
   because that is a genuine capability change rather than a marginal one.
 - **Same-tier swaps count too** — a specialist swap such as Sonnet → Codex at the
   same tier is still a model change, and is priced the same way.
+- **Switch cooldown** — `cooldownSeconds` starts after every applied switch:
+  for that many seconds only quality-critical jumps (`bypassTierDelta`) or
+  hard-ratio budget downgrades may switch again. The demand-space deadband
+  alone cannot stop alternating easy/hard prompts from flapping — every hop
+  pays a fresh miss. `0` (default) disables it.
+
+Alternating workloads on a budget? Beyond the cooldown, the patient settings
+`deadband: 0.5`, `maxPenaltyUsd: 0.02`, `bypassTierDelta: 3` cut switch
+frequency hard. And the cost of routing stays visible: `/jev-router` reports
+`switches: N this session · estimated cache miss ≈ $X`, every switch
+notification carries its own `cache miss ≈ $…` line, and each switched entry
+records `estimated cache miss ≈ $…` in its notes.
 
 Held turns still record the decision, and say so:
 
@@ -633,7 +646,7 @@ new `$5/day` / `$100/month` budget defaults now apply unless you set your own.
 | `kindModels` | see above | Task-specialist chains with `minTier` |
 | `kindMinimumTier` | see above | Per-kind floor tier |
 | `budget` | `$5/day`, `$100/month` | Spend policy (`0` disables a cap) |
-| `cache` | `aware`, cap `$0.05`, deadband `0.25` | Prompt-cache-aware switching |
+| `cache` | `aware`, cap `$0.05`, deadband `0.25`, cooldown `0s` | Prompt-cache-aware switching and the post-switch cooldown |
 | `profile` | `"balanced"` | Budget profile supplying the per-tier price bands |
 | `ceilings` | profile bands | Per-tier ceiling overrides (`$/M`, `input+2×output`); `null` = ∞ |
 | `deny` | `[]` | Glob patterns removed from derived chains (explicit entries survive) |

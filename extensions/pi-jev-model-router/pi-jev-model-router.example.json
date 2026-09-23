@@ -21,7 +21,8 @@
     "aware": true,
     "deadband": 0.25,
     "maxPenaltyUsd": 0.05,
-    "bypassTierDelta": 2
+    "bypassTierDelta": 2,
+    "cooldownSeconds": 0
   },
   "routes": {
     "quick":    [

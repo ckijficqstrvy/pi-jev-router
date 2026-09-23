@@ -310,6 +310,7 @@ async function main(): Promise<void> {
       JEV_ROUTER_CACHE_BYPASS_TIER_DELTA: "5",
       JEV_ROUTER_PROFILE: "quality",
       JEV_ROUTER_AUTO_ROUTES: "false",
+      JEV_ROUTER_CACHE_COOLDOWN_SECONDS: "7",
     }).config;
     assert.deepEqual(config, {
       ...DEFAULT_CONFIG,
@@ -326,7 +327,7 @@ async function main(): Promise<void> {
       routes: { quick: [], standard: [], high: [], premium: [] },
       kindModels: {},
       budget: { monthlyUsd: 1, softRatio: 0.2, hardRatio: 0.3 },
-      cache: { aware: false, deadband: 0.4, maxPenaltyUsd: 0.01, bypassTierDelta: 5 },
+      cache: { aware: false, deadband: 0.4, maxPenaltyUsd: 0.01, bypassTierDelta: 5, cooldownSeconds: 7 },
       profile: "quality",
       autoRoutes: false,
     });

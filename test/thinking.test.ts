@@ -17,6 +17,7 @@ import {
   decide,
   demandScore,
   describeThinking,
+  estimateCachePenaltyUsd,
   resolveThinking,
   thinkingLadder,
 } from "../extensions/pi-jev-model-router/router";
@@ -267,6 +268,67 @@ async function main(): Promise<void> {
     });
     assert.ok(d2);
     assert.equal(d2.model?.id, "pricey", "explicit entries ignore the band");
+  });
+
+  await test("cooldown: temporal hysteresis holds non-exempt switches; big jumps bypass", () => {
+    const models = [
+      { provider: "openrouter", id: "xiaomi/mimo-v2.6-flash" },
+      { provider: "openrouter", id: "xiaomi/mimo-v2.6-pro" },
+      { provider: "openrouter", id: "~anthropic/claude-sonnet-latest" },
+      { provider: "openrouter", id: "~anthropic/claude-opus-latest" },
+    ];
+    const spend = { today: 0, month: 0, pressure: 0 };
+    const config: JevRouterConfig = {
+      ...DEFAULT_CONFIG,
+      stickiness: false,
+      kindModels: {}, // drive the tier chain only
+      cache: { ...DEFAULT_CONFIG.cache, aware: false, cooldownSeconds: 300 },
+    };
+    const options = {
+      models,
+      spend,
+      current: { index: 0, model: models[0] },
+      lastSwitchAt: 1_000_000,
+      now: 1_000_000 + 60_000, // 60s into a 300s cooldown
+    };
+
+    // demand 1.0 → standard: delta 1 < bypassTierDelta 2 → held by cooldown
+    const held = decide(analysis({ complexity: 1, budgetIntensity: 1, deepReasoning: 0.5 }), config, options);
+    assert.ok(held);
+    assert.equal(held.held, true);
+    assert.equal(held.model?.id, "xiaomi/mimo-v2.6-flash", "stays on the warm model");
+    assert.ok(held.notes.some((n) => /cooldown/.test(n)), "the hold reason is visible");
+    assert.match(held.reason, /cooldown/);
+
+    // demand 1.5+0.75 → premium: delta 3 ≥ bypassTierDelta → exempt, switches
+    const bypass = decide(
+      analysis({ complexity: 2.5, budgetIntensity: 2.5, deepReasoning: 1 }),
+      config,
+      options,
+    );
+    assert.ok(bypass);
+    assert.notEqual(bypass.held, true, "quality-critical jumps ignore the cooldown");
+
+    // cooldown expired → normal decision
+    const later = decide(analysis({ complexity: 1, budgetIntensity: 1, deepReasoning: 0.5 }), config, {
+      ...options,
+      now: 1_000_000 + 301_000,
+    });
+    assert.ok(later);
+    assert.notEqual(later.held, true, "cooldown over: the switch proceeds");
+    assert.equal(later.model?.id, "xiaomi/mimo-v2.6-pro");
+  });
+
+  await test("cache miss estimate: context × (target cold − current warm)", () => {
+    const current = { provider: "x", id: "a", cost: { input: 1, output: 3, cacheRead: 0.1, cacheWrite: 3.75 } };
+    const target = { provider: "x", id: "b", cost: { input: 2, output: 8, cacheRead: 0.2, cacheWrite: 5 } };
+    // 50k × ((2 + 5) − 0.1)/1M = 0.345
+    assert.equal(estimateCachePenaltyUsd(50_000, current, target), 0.345);
+    assert.equal(
+      estimateCachePenaltyUsd(50_000, current, { provider: "x", id: "c" }),
+      0,
+      "unknown pricing never blocks and never fabricates a cost",
+    );
   });
 
   await test("decide() regression: demand/tier mapping unchanged", () => {
