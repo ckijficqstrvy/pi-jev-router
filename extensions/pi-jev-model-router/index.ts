@@ -621,7 +621,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
             return;
           }
           statusLine(ctx, runtime);
-          notify(ctx, `budget ${rest[0]} cap: ${formatUsd(amount)} (session only — persist in ~/.pi/agent/pi-jev-model-router.json)`, "info");
+          notify(ctx, `budget ${rest[0]} cap: ${formatUsd(amount)} (session only — persist in ~/.pi/agent/pi-jev-model-router/config.json)`, "info");
           return;
         }
         case "revert": {

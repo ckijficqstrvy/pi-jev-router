@@ -8,12 +8,16 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
  *
  * Resolution order (later wins):
  *   1. DEFAULTS below
- *   2. ~/.pi/agent/pi-jev-model-router.json
+ *   2. ~/.pi/agent/pi-jev-model-router/config.json
  *   3. env: TYPESAFE_API_KEY / JEV_ROUTER_MODE / JEV_ROUTER_OFF
  */
 
-/** Fixed spend-ledger path: single owner, not configurable, never a config key. */
-export const STATE_FILE = join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router-state.json");
+/**
+ * Fixed spend-ledger path: single owner, not configurable, never a config key.
+ * Both runtime files live namespaced under ~/.pi/agent/pi-jev-model-router/
+ * (same convention as pi-typesafe/ and pi-warden/), outside any git checkout.
+ */
+export const STATE_FILE = join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router", "state.json");
 /** The only environment variable the router may read a key from. */
 export const API_KEY_ENV = "TYPESAFE_API_KEY";
 
@@ -30,7 +34,7 @@ export interface RouteTarget {
   thinkingLevel?: ThinkingLevel;
   /**
    * Only used inside `kindModels`: this model may serve the kind when the
-   * chosen tier is at or above `minTier`. Defaults to "quick".
+   * chosen tier is at or above `minTier`. Omitted → treated as "standard".
    */
   minTier?: Tier;
 }
@@ -282,7 +286,7 @@ function merge(base: JevRouterConfig, patch: unknown): JevRouterConfig {
 }
 
 export function loadConfig(): JevRouterConfig {
-  const globalPatch = readJson(join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router.json"));
+  const globalPatch = readJson(join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router", "config.json"));
 
   // `useDefaultModels: false` means "bring your own models": start from empty
   // chains so the built-ins are not available as a base or as fallback.
