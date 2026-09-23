@@ -228,6 +228,7 @@ async function main(): Promise<void> {
       { provider: "openrouter", id: "~anthropic/claude-opus-latest" },
       { provider: "openrouter", id: "~z-ai/glm-flash-latest" },
       { provider: "openrouter", id: "openai/gpt-6-astra" },
+      { provider: "openrouter", id: "openai/gpt-6-sol" },
     ];
     const spend = { today: 0, month: 0, pressure: 0, dailyCap: 5, monthlyCap: 100 };
 
@@ -236,9 +237,9 @@ async function main(): Promise<void> {
     assert.ok(d1);
     assert.equal(d1.tier, "high");
     // Escalation rung: at high demand the kind chain's highest eligible
-    // minTier wins, so implement now reaches gpt-6-astra instead of always
-    // staying on the standard-tier specialist.
-    assert.equal(d1.model?.id, "openai/gpt-6-astra");
+    // minTier wins, so implement now reaches gpt-6-sol (the non-flagship
+    // ceiling) instead of always staying on the standard-tier specialist.
+    assert.equal(d1.model?.id, "openai/gpt-6-sol");
     assert.equal(d1.kindSpecialised, true);
     assert.equal(d1.demandScore, 1.5);
 

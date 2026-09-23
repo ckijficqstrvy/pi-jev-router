@@ -36,26 +36,24 @@
   },
   "kindModels": {
     "plan": [
-      { "provider": "openrouter", "model": "~anthropic/claude-opus-latest", "minTier": "premium" },
-      { "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest", "minTier": "high" }
+      { "provider": "openrouter", "model": "openai/gpt-6-sol", "minTier": "premium" },
+      { "provider": "openrouter", "model": "~z-ai/glm-latest", "minTier": "high" }
     ],
     "implement": [
       { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro", "minTier": "standard" },
       { "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest", "minTier": "standard" },
-      { "provider": "openrouter", "model": "openai/gpt-6-astra", "minTier": "high" },
-      { "provider": "openrouter", "model": "~anthropic/claude-opus-latest", "minTier": "premium" }
+      { "provider": "openrouter", "model": "openai/gpt-6-sol", "minTier": "high" }
     ],
     "debug": [
       { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro", "minTier": "standard" },
-      { "provider": "openrouter", "model": "openai/gpt-6-astra", "minTier": "high" },
-      { "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest", "minTier": "high" },
-      { "provider": "openrouter", "model": "~anthropic/claude-opus-latest", "minTier": "premium" }
+      { "provider": "openrouter", "model": "openai/gpt-6-sol", "minTier": "high" },
+      { "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest", "minTier": "high" }
     ],
     "refactor": [
       { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro", "minTier": "standard" }
     ],
     "review": [
-      { "provider": "openrouter", "model": "~anthropic/claude-opus-latest", "minTier": "high" },
+      { "provider": "openrouter", "model": "openai/gpt-6-sol", "minTier": "high" },
       { "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest", "minTier": "standard" }
     ],
     "research": [

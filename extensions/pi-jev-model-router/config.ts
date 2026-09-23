@@ -171,29 +171,27 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
   kindModels: {
     // Planning and design: strongest long-horizon reasoners.
     plan: [
-      { provider: "openrouter", model: "~anthropic/claude-opus-latest", minTier: "premium" },
-      { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "high" },
+      { provider: "openrouter", model: "openai/gpt-6-sol", minTier: "premium" },
+      { provider: "openrouter", model: "~z-ai/glm-latest", minTier: "high" },
     ],
     // Implementation: coding specialists.
     implement: [
       { provider: "openrouter", model: "xiaomi/mimo-v2.6-pro", minTier: "standard" },
       { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "standard" },
-      // Escalation rungs: decide() ranks eligible specialists by minTier
-      // (closest to the chosen tier first), so high-demand implementation
-      // climbs instead of staying on the standard-tier specialist.
-      { provider: "openrouter", model: "openai/gpt-6-astra", minTier: "high" },
-      { provider: "openrouter", model: "~anthropic/claude-opus-latest", minTier: "premium" },
+      // Escalation rung: decide() ranks eligible specialists by minTier, so
+      // high-demand implementation climbs to sol — which also serves premium
+      // (no separate premium rung: same model would be a duplicate entry).
+      { provider: "openrouter", model: "openai/gpt-6-sol", minTier: "high" },
     ],
     debug: [
       { provider: "openrouter", model: "xiaomi/mimo-v2.6-pro", minTier: "standard" },
-      { provider: "openrouter", model: "openai/gpt-6-astra", minTier: "high" },
+      { provider: "openrouter", model: "openai/gpt-6-sol", minTier: "high" },
       { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "high" },
-      { provider: "openrouter", model: "~anthropic/claude-opus-latest", minTier: "premium" },
     ],
     refactor: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-pro", minTier: "standard" }],
-    // Review and audit: strongest reviewers only.
+    // Review and audit: strongest reviewers (non-flagship ceiling = sol).
     review: [
-      { provider: "openrouter", model: "~anthropic/claude-opus-latest", minTier: "high" },
+      { provider: "openrouter", model: "openai/gpt-6-sol", minTier: "high" },
       { provider: "openrouter", model: "~anthropic/claude-sonnet-latest", minTier: "standard" },
     ],
     // Research: long-context readers.

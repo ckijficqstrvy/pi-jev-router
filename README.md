@@ -204,11 +204,11 @@ enough (`minTier`):
 
 | Kind | Specialists |
 | --- | --- |
-| `plan` | `~anthropic/claude-opus-latest` (≥premium) → `~anthropic/claude-sonnet-latest` (≥high) |
-| `implement` | `xiaomi/mimo-v2.6-pro` (≥standard) → `~anthropic/claude-sonnet-latest` (≥standard) → `openai/gpt-6-astra` (≥high) → `~anthropic/claude-opus-latest` (≥premium) |
-| `debug` | `xiaomi/mimo-v2.6-pro` (≥standard) → `openai/gpt-6-astra` (≥high) → `~anthropic/claude-sonnet-latest` (≥high) → `~anthropic/claude-opus-latest` (≥premium) |
+| `plan` | `openai/gpt-6-sol` (≥premium) → `~z-ai/glm-latest` (≥high) |
+| `implement` | `xiaomi/mimo-v2.6-pro` (≥standard) → `~anthropic/claude-sonnet-latest` (≥standard) → `openai/gpt-6-sol` (≥high, also serves premium) |
+| `debug` | `xiaomi/mimo-v2.6-pro` (≥standard) → `openai/gpt-6-sol` (≥high, also serves premium) → `~anthropic/claude-sonnet-latest` (≥high) |
 | `refactor` | `xiaomi/mimo-v2.6-pro` (≥standard) |
-| `review` | `~anthropic/claude-opus-latest` (≥high) → `~anthropic/claude-sonnet-latest` (≥standard) |
+| `review` | `openai/gpt-6-sol` (≥high) → `~anthropic/claude-sonnet-latest` (≥standard) |
 | `research` | `~anthropic/claude-sonnet-latest` (≥standard) → `xiaomi/mimo-v2.6-pro` (≥standard) |
 | `explain` | `xiaomi/mimo-v2.6-flash` (≥quick) → `xiaomi/mimo-v2.6-pro` (≥standard) |
 | `operate` | `xiaomi/mimo-v2.6-pro` (≥standard) |
