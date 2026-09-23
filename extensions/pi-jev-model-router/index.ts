@@ -13,7 +13,7 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { apiKeySourceLabel, loadConfig, resolveApiKey, STATE_FILE, TIERS, type JevRouterConfig, type ThinkingLevel } from "./config";
+import { apiKeySourceLabel, loadConfigDetailed, resolveApiKey, STATE_FILE, TIERS, type JevRouterConfig, type ThinkingLevel } from "./config";
 import {
   formatUsd,
   loadLedger,
@@ -41,6 +41,10 @@ import {
 
 interface Runtime {
   config: JevRouterConfig;
+  /** Config validation problems from the last load (env overrides, invariants). */
+  configWarnings: string[];
+  /** Env variables that overrode a config value at the last load. */
+  envOverrides: string[];
   ledger: Ledger;
   models: AvailableModel[];
   lastDecision?: Decision;
@@ -494,8 +498,11 @@ function formatAnalysis(analysis: RouteAnalysis, decision?: Decision): string {
 export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void> {
   api = pi;
 
+  const initial = loadConfigDetailed();
   const runtime: Runtime = {
-    config: loadConfig(),
+    config: initial.config,
+    configWarnings: initial.warnings,
+    envOverrides: initial.envOverrides,
     ledger: loadLedger(STATE_FILE),
     models: [],
   };
@@ -557,11 +564,21 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    runtime.config = loadConfig();
+    const loaded = loadConfigDetailed();
+    runtime.config = loaded.config;
+    runtime.configWarnings = loaded.warnings;
+    runtime.envOverrides = loaded.envOverrides;
     runtime.ledger = loadLedger(STATE_FILE);
     runtime.models = toAvailable(ctx);
     runtime.appliedTierIndex = tierForModel(currentModelKey(ctx), runtime.config);
     statusLine(ctx, runtime);
+    if (runtime.configWarnings.length > 0) {
+      notify(
+        ctx,
+        `pi-jev-model-router: config validation — invalid overrides ignored, previous values stand:\n· ${runtime.configWarnings.join("\n· ")}`,
+        "warning",
+      );
+    }
     if (runtime.config.enabled && !resolveApiKey()) {
       notify(ctx, 
         "pi-jev-model-router: no API key. Set TYPESAFE_API_KEY or run /typesafe login.",
@@ -746,6 +763,10 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
             `budget pressure: ${spend.pressure > 0 ? `${(spend.pressure * 100).toFixed(0)}%` : "no caps set"}`,
             `cache-aware: ${runtime.config.cache.aware ? `on (cap ${formatUsd(runtime.config.cache.maxPenaltyUsd)}, deadband ${runtime.config.cache.deadband})` : "off"}`,
             `built-in models: ${runtime.config.useDefaultModels ? "on" : "off (config-only)"}`,
+            `env overrides: ${runtime.envOverrides.length > 0 ? runtime.envOverrides.join(", ") : "none"}`,
+            ...(runtime.configWarnings.length > 0
+              ? ["", "config warnings:", ...runtime.configWarnings.map((warning) => `  ! ${warning}`)]
+              : []),
             `jev requests: ${runtime.ledger.jev.requests}`,
             "",
             "routes:",

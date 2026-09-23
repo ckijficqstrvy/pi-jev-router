@@ -404,7 +404,39 @@ Later sources win:
 
 1. built-in defaults
 2. `~/.pi/agent/pi-jev-model-router/config.json`
-3. env: `TYPESAFE_API_KEY`, `JEV_ROUTER_MODE` (`auto|confirm|notify`), `JEV_ROUTER_OFF=1`
+3. `JEV_ROUTER_*` environment variables (table below)
+
+| Variable | Overrides | Accepts |
+| --- | --- | --- |
+| `JEV_ROUTER_ENABLED` | `enabled` | `1/0`, `true/false`, `yes/no`, `on/off` |
+| `JEV_ROUTER_OFF` | `enabled` (legacy kill switch) | `1`/`true` disables routing; `JEV_ROUTER_ENABLED` wins when both are set |
+| `JEV_ROUTER_MODE` | `mode` | `auto`, `confirm`, `notify` |
+| `JEV_ROUTER_USE_DEFAULT_MODELS` | `useDefaultModels` | boolean |
+| `JEV_ROUTER_JEV_MODEL` | `jevModel` | printable ASCII model id |
+| `JEV_ROUTER_TIMEOUT_MS` | `timeoutMs` | integer ≥ 0 |
+| `JEV_ROUTER_MIN_PROMPT_CHARS` | `minPromptChars` | integer ≥ 0 |
+| `JEV_ROUTER_HISTORY_TURNS` | `historyTurns` | integer ≥ 0 |
+| `JEV_ROUTER_CONFIDENCE_THRESHOLD` | `confidenceThreshold` | number 0–1 |
+| `JEV_ROUTER_STICKINESS` | `stickiness` | boolean |
+| `JEV_ROUTER_BUDGET_DAILY_USD` | `budget.dailyUsd` | USD amount ≥ 0, or `none` to remove the cap |
+| `JEV_ROUTER_BUDGET_MONTHLY_USD` | `budget.monthlyUsd` | USD amount ≥ 0, or `none` to remove the cap |
+| `JEV_ROUTER_BUDGET_SOFT_RATIO` | `budget.softRatio` | number 0–1, ≤ `budget.hardRatio` |
+| `JEV_ROUTER_BUDGET_HARD_RATIO` | `budget.hardRatio` | number 0–1, ≥ `budget.softRatio` |
+| `JEV_ROUTER_CACHE_AWARE` | `cache.aware` | boolean |
+| `JEV_ROUTER_CACHE_DEADBAND` | `cache.deadband` | number ≥ 0 |
+| `JEV_ROUTER_CACHE_MAX_PENALTY_USD` | `cache.maxPenaltyUsd` | USD amount ≥ 0 |
+| `JEV_ROUTER_CACHE_BYPASS_TIER_DELTA` | `cache.bypassTierDelta` | integer ≥ 0 |
+| `JEV_ROUTER_KIND_MIN_TIER` | `kindMinimumTier` entries | comma-separated `kind=tier` pairs, e.g. `plan=high,review=high` |
+
+`routes` and `kindModels` are lists of model specs — structured data belongs in
+config.json, so they are deliberately not environment-reachable.
+`TYPESAFE_API_KEY` is read for authentication, not as a config override.
+
+Every value is validated when the config loads. A malformed or out-of-range
+value never reaches the router: the variable is dropped with a warning, the
+config.json/default value stands, and the problem is reported at session start
+and in `/jev-router` status (the offending value is echoed only when it is
+short printable ASCII). An empty value counts as unset.
 
 There is no project-level config: a cloned repo cannot inject router settings.
 

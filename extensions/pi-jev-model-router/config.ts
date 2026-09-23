@@ -9,7 +9,14 @@ import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
  * Resolution order (later wins):
  *   1. DEFAULTS below
  *   2. ~/.pi/agent/pi-jev-model-router/config.json
- *   3. env: TYPESAFE_API_KEY / JEV_ROUTER_MODE / JEV_ROUTER_OFF
+ *   3. the JEV_ROUTER_* environment overrides (see ENV_VARS below)
+ *
+ * Every env value is validated when the config loads: a malformed or
+ * out-of-range value never reaches the resolved config — the variable is
+ * dropped, a warning naming it and the accepted form is collected in
+ * `ConfigLoadResult.warnings` (surfaced at session start and in
+ * `/jev-router` status), and the previous layer's value stands. TYPESAFE_API_KEY
+ * is read separately by resolveApiKey().
  */
 
 /**
@@ -320,29 +327,390 @@ function merge(base: JevRouterConfig, patch: unknown): JevRouterConfig {
   return next;
 }
 
-export function loadConfig(): JevRouterConfig {
-  const globalPatch = readJson(join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router", "config.json"));
+// ---------------------------------------------------------------------------
+// Environment-variable overrides
+// ---------------------------------------------------------------------------
 
-  // `useDefaultModels: false` means "bring your own models": start from empty
-  // chains so the built-ins are not available as a base or as fallback.
-  const globalUseDefaultModels = asRecord(globalPatch).useDefaultModels;
+/** Minimal env surface the loader reads from (process.env satisfies it). */
+export type EnvSource = Record<string, string | undefined>;
+
+/**
+ * Deployment-time overrides for every scalar knob in JevRouterConfig.
+ *
+ * Deliberate boundary: `routes` and `kindModels` are lists of model specs —
+ * structured data belongs in config.json, not in shell strings. Scalars are
+ * environment-reachable; structured settings are not.
+ *
+ * Validation is strict and fail-safe: `parse` returns INVALID for anything
+ * malformed or out of range, such a variable is dropped with a warning and the
+ * config.json/default value stands. A raw value is only echoed in a warning
+ * when it is short printable ASCII, so a secret pasted into the wrong variable
+ * cannot leak into logs.
+ */
+interface EnvVarSpec {
+  /** Variable name, also the key read from the env source. */
+  name: string;
+  /** Accepted form, human-readable; used verbatim in validation warnings. */
+  expected: string;
+  /** Validate one non-empty raw value: a typed value, CLEAR, or INVALID. */
+  parse(raw: string): unknown;
+  /** Write the parsed value into the config; return true when it changed. */
+  apply(config: JevRouterConfig, value: unknown): boolean;
+}
+
+/** `parse` result: the raw value is malformed or out of range. */
+const INVALID = Symbol("invalid");
+/** `parse` result: clear an optional setting (e.g. "no daily cap"). */
+const CLEAR = Symbol("clear");
+
+const BOOL_TRUE = new Set(["1", "true", "yes", "on"]);
+const BOOL_FALSE = new Set(["0", "false", "no", "off"]);
+const BOOL_EXPECTED = "1/0, true/false, yes/no, or on/off";
+const CAP_CLEAR = new Set(["none", "off", "unlimited"]);
+
+/** Accept the usual truthy/falsy spellings, case-insensitively. */
+function parseBool(raw: string): boolean | undefined {
+  const value = raw.trim().toLowerCase();
+  if (BOOL_TRUE.has(value)) return true;
+  if (BOOL_FALSE.has(value)) return false;
+  return undefined;
+}
+
+const NUMBER_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/** Strict numeric parse: rejects hex/exponents-only garbage, NaN, Infinity, and range violations. */
+function parseNumber(raw: string, opts: { integer?: boolean; min?: number; max?: number } = {}): number | undefined {
+  const text = raw.trim();
+  if (!NUMBER_RE.test(text)) return undefined;
+  const value = Number(text);
+  if (!Number.isFinite(value)) return undefined;
+  if (opts.integer && !Number.isInteger(value)) return undefined;
+  if (opts.min !== undefined && value < opts.min) return undefined;
+  if (opts.max !== undefined && value > opts.max) return undefined;
+  return value;
+}
+
+/** Echo the offending value only when it is short printable ASCII. */
+function describeRaw(raw: string): string {
+  return /^[\x20-\x7e]{1,40}$/.test(raw) ? JSON.stringify(raw) : "(unprintable value not shown)";
+}
+
+function assign<T extends object, K extends keyof T>(target: T, key: K, value: T[K]): boolean {
+  if (target[key] === value) return false;
+  target[key] = value;
+  return true;
+}
+
+/** Optional numeric cap: a value, or CLEAR to remove the cap entirely. */
+function assignCap(key: "dailyUsd" | "monthlyUsd") {
+  return (config: JevRouterConfig, value: unknown): boolean => {
+    if (value === CLEAR) {
+      if (config.budget[key] === undefined) return false;
+      delete config.budget[key];
+      return true;
+    }
+    return assign(config.budget, key, value as number);
+  };
+}
+
+function parseCap(raw: string): number | typeof CLEAR | typeof INVALID {
+  const text = raw.trim().toLowerCase();
+  if (CAP_CLEAR.has(text)) return CLEAR;
+  return parseNumber(raw, { min: 0 }) ?? INVALID;
+}
+
+function parseRatio(raw: string): number | typeof INVALID {
+  return parseNumber(raw, { min: 0, max: 1 }) ?? INVALID;
+}
+
+const ENV_KIND_MIN_TIER = "JEV_ROUTER_KIND_MIN_TIER";
+const ENV_BUDGET_SOFT_RATIO = "JEV_ROUTER_BUDGET_SOFT_RATIO";
+const ENV_BUDGET_HARD_RATIO = "JEV_ROUTER_BUDGET_HARD_RATIO";
+
+const ENV_VARS: readonly EnvVarSpec[] = [
+  {
+    // Legacy kill switch (pre-dates JEV_ROUTER_ENABLED). Only a truthy value
+    // acts; JEV_ROUTER_ENABLED is listed later and wins when both are set.
+    name: "JEV_ROUTER_OFF",
+    expected: `${BOOL_EXPECTED} (legacy kill switch)`,
+    parse: (raw) => parseBool(raw) ?? INVALID,
+    apply: (config, value) => {
+      if (value !== true || !config.enabled) return false;
+      config.enabled = false;
+      return true;
+    },
+  },
+  {
+    name: "JEV_ROUTER_ENABLED",
+    expected: BOOL_EXPECTED,
+    parse: (raw) => parseBool(raw) ?? INVALID,
+    apply: (config, value) => assign(config, "enabled", value as boolean),
+  },
+  {
+    name: "JEV_ROUTER_MODE",
+    expected: "auto, confirm, or notify",
+    parse: (raw) => {
+      const value = raw.trim().toLowerCase();
+      return (MODES as readonly string[]).includes(value) ? value : INVALID;
+    },
+    apply: (config, value) => assign(config, "mode", value as Mode),
+  },
+  {
+    name: "JEV_ROUTER_USE_DEFAULT_MODELS",
+    expected: BOOL_EXPECTED,
+    parse: (raw) => parseBool(raw) ?? INVALID,
+    apply: (config, value) => assign(config, "useDefaultModels", value as boolean),
+  },
+  {
+    name: "JEV_ROUTER_JEV_MODEL",
+    expected: "a printable ASCII model id",
+    parse: (raw) => {
+      const value = raw.trim();
+      return /^[\x21-\x7e]+$/.test(value) ? value : INVALID;
+    },
+    apply: (config, value) => assign(config, "jevModel", value as string),
+  },
+  {
+    name: "JEV_ROUTER_TIMEOUT_MS",
+    expected: "an integer ≥ 0 (milliseconds)",
+    parse: (raw) => parseNumber(raw, { integer: true, min: 0 }) ?? INVALID,
+    apply: (config, value) => assign(config, "timeoutMs", value as number),
+  },
+  {
+    name: "JEV_ROUTER_MIN_PROMPT_CHARS",
+    expected: "an integer ≥ 0",
+    parse: (raw) => parseNumber(raw, { integer: true, min: 0 }) ?? INVALID,
+    apply: (config, value) => assign(config, "minPromptChars", value as number),
+  },
+  {
+    name: "JEV_ROUTER_HISTORY_TURNS",
+    expected: "an integer ≥ 0",
+    parse: (raw) => parseNumber(raw, { integer: true, min: 0 }) ?? INVALID,
+    apply: (config, value) => assign(config, "historyTurns", value as number),
+  },
+  {
+    name: "JEV_ROUTER_CONFIDENCE_THRESHOLD",
+    expected: "a number between 0 and 1",
+    parse: (raw) => parseRatio(raw),
+    apply: (config, value) => assign(config, "confidenceThreshold", value as number),
+  },
+  {
+    name: "JEV_ROUTER_STICKINESS",
+    expected: BOOL_EXPECTED,
+    parse: (raw) => parseBool(raw) ?? INVALID,
+    apply: (config, value) => assign(config, "stickiness", value as boolean),
+  },
+  {
+    name: "JEV_ROUTER_BUDGET_DAILY_USD",
+    expected: 'a USD amount ≥ 0, or "none" to remove the cap',
+    parse: parseCap,
+    apply: assignCap("dailyUsd"),
+  },
+  {
+    name: "JEV_ROUTER_BUDGET_MONTHLY_USD",
+    expected: 'a USD amount ≥ 0, or "none" to remove the cap',
+    parse: parseCap,
+    apply: assignCap("monthlyUsd"),
+  },
+  {
+    name: ENV_BUDGET_SOFT_RATIO,
+    expected: "a number between 0 and 1, ≤ budget.hardRatio",
+    parse: (raw) => parseRatio(raw),
+    apply: (config, value) => assign(config.budget, "softRatio", value as number),
+  },
+  {
+    name: ENV_BUDGET_HARD_RATIO,
+    expected: "a number between 0 and 1, ≥ budget.softRatio",
+    parse: (raw) => parseRatio(raw),
+    apply: (config, value) => assign(config.budget, "hardRatio", value as number),
+  },
+  {
+    name: "JEV_ROUTER_CACHE_AWARE",
+    expected: BOOL_EXPECTED,
+    parse: (raw) => parseBool(raw) ?? INVALID,
+    apply: (config, value) => assign(config.cache, "aware", value as boolean),
+  },
+  {
+    name: "JEV_ROUTER_CACHE_DEADBAND",
+    expected: "a number ≥ 0",
+    parse: (raw) => parseNumber(raw, { min: 0 }) ?? INVALID,
+    apply: (config, value) => assign(config.cache, "deadband", value as number),
+  },
+  {
+    name: "JEV_ROUTER_CACHE_MAX_PENALTY_USD",
+    expected: "a USD amount ≥ 0",
+    parse: (raw) => parseNumber(raw, { min: 0 }) ?? INVALID,
+    apply: (config, value) => assign(config.cache, "maxPenaltyUsd", value as number),
+  },
+  {
+    name: "JEV_ROUTER_CACHE_BYPASS_TIER_DELTA",
+    expected: "an integer ≥ 0",
+    parse: (raw) => parseNumber(raw, { integer: true, min: 0 }) ?? INVALID,
+    apply: (config, value) => assign(config.cache, "bypassTierDelta", value as number),
+  },
+  {
+    name: ENV_KIND_MIN_TIER,
+    expected:
+      "comma-separated kind=tier pairs (kinds: plan/implement/write/debug/refactor/review/research/explain/operate/chat; tiers: quick/standard/high/premium)",
+    parse: (raw) => {
+      const pairs: Array<[string, Tier]> = [];
+      for (const segment of raw.split(",")) {
+        if (!segment.trim()) continue;
+        const eq = segment.indexOf("=");
+        if (eq < 0) return INVALID;
+        const kind = segment.slice(0, eq).trim().toLowerCase();
+        const tier = segment.slice(eq + 1).trim().toLowerCase();
+        if (!(kind in TASK_KINDS)) return INVALID;
+        if (!(TIERS as readonly string[]).includes(tier)) return INVALID;
+        pairs.push([kind, tier as Tier]);
+      }
+      return pairs.length > 0 ? pairs : INVALID;
+    },
+    apply: (config, value) => {
+      let changed = false;
+      for (const [kind, tier] of value as Array<[string, Tier]>) {
+        if (config.kindMinimumTier[kind] === tier) continue;
+        config.kindMinimumTier[kind] = tier;
+        changed = true;
+      }
+      return changed;
+    },
+  },
+];
+
+export interface EnvOverrideResult {
+  /** The config with validated env overrides applied. */
+  config: JevRouterConfig;
+  /** Variables that actually changed a value, in application order. */
+  applied: string[];
+  /** Validation problems; each names the variable and its accepted form. */
+  warnings: string[];
+}
+
+/**
+ * Apply validated env overrides on top of a config. Pure: the input is never
+ * mutated. Invalid values are dropped with a warning and leave the incoming
+ * value in place; an empty or whitespace-only value counts as unset.
+ */
+export function applyEnvOverrides(base: JevRouterConfig, env: EnvSource): EnvOverrideResult {
+  const config: JevRouterConfig = {
+    ...base,
+    kindMinimumTier: { ...base.kindMinimumTier },
+    budget: { ...base.budget },
+    cache: { ...base.cache },
+  };
+  const applied: string[] = [];
+  const warnings: string[] = [];
+  for (const spec of ENV_VARS) {
+    const raw = env[spec.name];
+    if (raw === undefined || raw.trim() === "") continue;
+    const value = spec.parse(raw);
+    if (value === INVALID) {
+      warnings.push(`${spec.name}: expected ${spec.expected}, got ${describeRaw(raw)} — override ignored`);
+      continue;
+    }
+    if (spec.apply(config, value)) applied.push(spec.name);
+  }
+
+  // Cross-field coherence: soft > hard makes the downgrade and force thresholds
+  // fire in the wrong order. Drop the env-side ratio overrides rather than ship
+  // an incoherent pair; the config-file values stand and invariantWarnings()
+  // still reports a file-side violation.
+  if (config.budget.softRatio > config.budget.hardRatio) {
+    const ratioVars = [ENV_BUDGET_SOFT_RATIO, ENV_BUDGET_HARD_RATIO].filter((name) => applied.includes(name));
+    if (ratioVars.length > 0) {
+      for (const name of ratioVars) {
+        if (name === ENV_BUDGET_SOFT_RATIO) config.budget.softRatio = base.budget.softRatio;
+        else config.budget.hardRatio = base.budget.hardRatio;
+        applied.splice(applied.indexOf(name), 1);
+      }
+      warnings.push(
+        `${ratioVars.join(" + ")}: budget.softRatio must be ≤ budget.hardRatio — override${ratioVars.length > 1 ? "s" : ""} dropped`,
+      );
+    }
+  }
+  return { config, applied, warnings };
+}
+
+/**
+ * Source-agnostic sanity report on a resolved config. Env values are already
+ * validated, so warnings here usually trace back to config.json (whose merge
+ * is whitelist-lenient by design). Reporting only — values are never mutated.
+ */
+function invariantWarnings(config: JevRouterConfig): string[] {
+  const warnings: string[] = [];
+  const bounded = (label: string, value: number): void => {
+    if (!(value >= 0 && value <= 1)) warnings.push(`${label} (${value}) should be within 0–1`);
+  };
+  const nonNegative = (label: string, value: number): void => {
+    if (!(value >= 0)) warnings.push(`${label} (${value}) should be ≥ 0`);
+  };
+  bounded("confidenceThreshold", config.confidenceThreshold);
+  bounded("budget.softRatio", config.budget.softRatio);
+  bounded("budget.hardRatio", config.budget.hardRatio);
+  if (config.budget.softRatio > config.budget.hardRatio) {
+    warnings.push(
+      `budget.softRatio (${config.budget.softRatio}) exceeds budget.hardRatio (${config.budget.hardRatio}) — downgrade and force thresholds fire in the wrong order`,
+    );
+  }
+  nonNegative("timeoutMs", config.timeoutMs);
+  nonNegative("minPromptChars", config.minPromptChars);
+  nonNegative("historyTurns", config.historyTurns);
+  if (config.budget.dailyUsd !== undefined) nonNegative("budget.dailyUsd", config.budget.dailyUsd);
+  if (config.budget.monthlyUsd !== undefined) nonNegative("budget.monthlyUsd", config.budget.monthlyUsd);
+  nonNegative("cache.deadband", config.cache.deadband);
+  nonNegative("cache.maxPenaltyUsd", config.cache.maxPenaltyUsd);
+  nonNegative("cache.bypassTierDelta", config.cache.bypassTierDelta);
+  return warnings;
+}
+
+export interface ConfigLoadResult {
+  config: JevRouterConfig;
+  /** Validation problems found while loading; empty when clean. */
+  warnings: string[];
+  /** Env variables that overrode a value, in application order. */
+  envOverrides: string[];
+}
+
+/**
+ * Pure resolution core: defaults → config patch → env, with validation.
+ * `patch` is the already-parsed config.json content (or undefined for none).
+ */
+export function resolveConfig(patch: unknown, env: EnvSource = process.env): ConfigLoadResult {
+  // `useDefaultModels: false` (file or env) means "bring your own models":
+  // start from empty chains so the built-ins are not available as a base or as
+  // fallback. The env value is consulted early because it selects the base;
+  // applyEnvOverrides re-applies (and re-validates) it later.
+  const envUseDefaultRaw = env.JEV_ROUTER_USE_DEFAULT_MODELS;
+  const envUseDefault =
+    envUseDefaultRaw === undefined || envUseDefaultRaw.trim() === "" ? undefined : parseBool(envUseDefaultRaw);
+  const patchUseDefault = asRecord(patch).useDefaultModels;
   const useDefaults =
-    typeof globalUseDefaultModels === "boolean" ? globalUseDefaultModels : DEFAULT_CONFIG.useDefaultModels;
+    envUseDefault ?? (typeof patchUseDefault === "boolean" ? patchUseDefault : DEFAULT_CONFIG.useDefaultModels);
 
   let config = useDefaults
     ? { ...DEFAULT_CONFIG }
     : { ...DEFAULT_CONFIG, routes: emptyChains(), kindModels: {} };
 
-  if (globalPatch) config = merge(config, globalPatch);
+  if (patch) config = merge(config, patch);
 
-  if (process.env.JEV_ROUTER_MODE) {
-    const mode = process.env.JEV_ROUTER_MODE.toLowerCase();
-    if (mode === "auto" || mode === "confirm" || mode === "notify") config.mode = mode;
-  }
-  if (process.env.JEV_ROUTER_OFF === "1" || process.env.JEV_ROUTER_OFF === "true") {
-    config.enabled = false;
-  }
-  return config;
+  const envResult = applyEnvOverrides(config, env);
+  return {
+    config: envResult.config,
+    warnings: [...envResult.warnings, ...invariantWarnings(envResult.config)],
+    envOverrides: envResult.applied,
+  };
+}
+
+/** resolveConfig against the real config file and process.env. */
+export function loadConfigDetailed(): ConfigLoadResult {
+  const patch = readJson(join(homedir(), CONFIG_DIR_NAME, "agent", "pi-jev-model-router", "config.json"));
+  return resolveConfig(patch, process.env);
+}
+
+/** Convenience: the resolved config only (warnings in loadConfigDetailed). */
+export function loadConfig(): JevRouterConfig {
+  return loadConfigDetailed().config;
 }
 
 function emptyChains(): Record<Tier, RouteChain> {

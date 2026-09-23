@@ -122,10 +122,29 @@ restart re-reads `enabled` and `mode` from the config file and the
 
 Optional. Create `~/.pi/agent/pi-jev-model-router/config.json`
 (see `pi-jev-model-router.example.json`). Later sources win: defaults →
-`~/.pi/agent/pi-jev-model-router/config.json` → env (`TYPESAFE_API_KEY`,
-`JEV_ROUTER_MODE`, `JEV_ROUTER_OFF=1`). There is no project-level config:
+`~/.pi/agent/pi-jev-model-router/config.json` → `JEV_ROUTER_*` environment
+variables. There is no project-level config:
 project config files are no longer read, so a cloned repo cannot inject router
 settings.
+
+Every scalar setting is environment-reachable (`JEV_ROUTER_ENABLED`,
+`JEV_ROUTER_MODE`, `JEV_ROUTER_USE_DEFAULT_MODELS`, `JEV_ROUTER_JEV_MODEL`,
+`JEV_ROUTER_TIMEOUT_MS`, `JEV_ROUTER_MIN_PROMPT_CHARS`, `JEV_ROUTER_HISTORY_TURNS`,
+`JEV_ROUTER_CONFIDENCE_THRESHOLD`, `JEV_ROUTER_STICKINESS`,
+`JEV_ROUTER_BUDGET_DAILY_USD`, `JEV_ROUTER_BUDGET_MONTHLY_USD`,
+`JEV_ROUTER_BUDGET_SOFT_RATIO`, `JEV_ROUTER_BUDGET_HARD_RATIO`,
+`JEV_ROUTER_CACHE_AWARE`, `JEV_ROUTER_CACHE_DEADBAND`,
+`JEV_ROUTER_CACHE_MAX_PENALTY_USD`, `JEV_ROUTER_CACHE_BYPASS_TIER_DELTA`,
+`JEV_ROUTER_KIND_MIN_TIER` as `kind=tier` pairs). `JEV_ROUTER_OFF=1` remains as
+a legacy kill switch. `routes` and `kindModels` are structured model specs and
+stay config.json-only. `TYPESAFE_API_KEY` is read for authentication.
+
+Every value is validated on load: a malformed or out-of-range value is dropped
+with a warning (shown at session start and in `/jev-router` status) and the
+config.json/default value stands. Booleans accept `1/0`, `true/false`,
+`yes/no`, `on/off`; ratios must sit in 0–1 with `softRatio ≤ hardRatio`; caps
+accept a USD amount ≥ 0 or `none` to remove the cap. The full table of accepted
+forms lives in the repository README.
 
 ```json
 {
