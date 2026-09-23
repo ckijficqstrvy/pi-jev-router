@@ -2,8 +2,9 @@
  * pi-jev-model-router — TypeSafe Jev model router for pi.
  *
  * On every user prompt: send the request to Jev (System One), get typed
- * judgments about what the work is, how hard it is, and how much capability it
- * deserves, then route the turn to the matching model tier. Code applies the
+ * judgments about what the work is, how hard it is, how much capability it
+ * deserves, and how deeply it should think, then route the turn to the matching
+ * model tier. Code applies the
  * budget policy; Jev only judges the task.
  *
  * Commands:  /jev-router [status|on|off|mode|budget|why|revert]
@@ -12,7 +13,7 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { apiKeySourceLabel, loadConfig, resolveApiKey, STATE_FILE, TIERS, type JevRouterConfig } from "./config";
+import { apiKeySourceLabel, loadConfig, resolveApiKey, STATE_FILE, TIERS, type JevRouterConfig, type ThinkingLevel } from "./config";
 import {
   formatUsd,
   loadLedger,
@@ -26,12 +27,16 @@ import { classifyRequest, JevError, sanitizeRemote, type RouteAnalysis } from ".
 import {
   decide,
   describeDecision,
+  describeThinking,
   findModel,
   firstAvailable,
+  resolveThinking,
   tierIndex,
   tierForModel,
   type AvailableModel,
   type Decision,
+  type ThinkingResolution,
+  type ThinkingSource,
 } from "./router";
 
 interface Runtime {
@@ -58,6 +63,14 @@ interface DecisionEntry {
   complexity: number;
   capability: number;
   deepReasoning: number;
+  /** Resolved thinking level (config pin > Jev > ladder > tier default). */
+  thinking?: ThinkingLevel;
+  /** Which resolution layer won. */
+  thinkingSource?: ThinkingSource;
+  /** Raw 5th-question answer when it differs from the resolved level (pin won). */
+  thinkingJudged?: ThinkingLevel;
+  /** What pi actually kept after per-model clamping; undefined when not applied. */
+  thinkingApplied?: ThinkingLevel;
   demand: number;
   pressure: number;
   reason: string;
@@ -103,6 +116,8 @@ function appendDecisionEntry(
   decision: Decision,
   action: DecisionEntry["action"],
   runtime: Runtime,
+  thinking?: ThinkingResolution,
+  applied?: ThinkingLevel,
 ): void {
   const model = decision.model
     ? `${decision.model.provider}/${decision.model.id}`
@@ -117,6 +132,10 @@ function appendDecisionEntry(
       complexity: analysis.complexity,
       capability: analysis.budgetIntensity,
       deepReasoning: analysis.deepReasoning,
+      thinking: thinking?.level,
+      thinkingSource: thinking?.source,
+      thinkingJudged: thinking?.judged,
+      thinkingApplied: applied,
       demand: decision.demandScore,
       pressure: decision.budgetPressure,
       reason: decision.reason,
@@ -125,6 +144,23 @@ function appendDecisionEntry(
     },
     runtime,
   );
+}
+
+/** Expanded-entry line for the thinking resolution: source, judgment, applied value. */
+function entryThinkingLine(data: DecisionEntry): string | undefined {
+  if (!data.thinking) return undefined;
+  let line = `thinking ${data.thinking} (${data.thinkingSource ?? "tier"}`;
+  if (data.thinkingJudged && data.thinkingJudged !== data.thinking) line += `, judged ${data.thinkingJudged}`;
+  line += ")";
+  if (data.thinkingApplied) {
+    line +=
+      data.thinkingApplied === data.thinking
+        ? ` → applied ${data.thinkingApplied}`
+        : ` → applied ${data.thinkingApplied} (clamped by model)`;
+  } else if (data.action === "notified") {
+    line += " · not applied (notify mode)";
+  }
+  return line;
 }
 
 const SKIP_REASONS: Record<string, string> = {
@@ -261,8 +297,9 @@ async function analyse(
   }
   if (runtime.models.length === 0) runtime.models = toAvailable(ctx);
   const spend = spendSnapshot(runtime.ledger, config.budget);
-  // Context size prices the cache miss a switch would cause.
-  const contextTokens = ctx.getContextUsage?.()?.tokens;
+  // Context size prices the cache miss a switch would cause (some pi builds
+  // report `null` for an unknown usage; decide() wants undefined there).
+  const contextTokens = ctx.getContextUsage?.()?.tokens ?? undefined;
   const activeKey = currentModelKey(ctx);
 
   const analysis = await classifyRequest(
@@ -312,19 +349,28 @@ async function applyDecision(
     decision.held === true ||
     (runtime.config.stickiness && targetKey !== undefined && currentKey === targetKey);
 
+  // Thinking resolution: config pin > Jev's 5th-question judgment > demand
+  // ladder > tier static default. Applied on the kept/held/switched paths —
+  // there the active model *is* the decision's model, so the level belongs to
+  // it (this also fixes stale thinking after a manual model switch or a cache
+  // hold). notify mode reports the resolved level without applying it: a
+  // suggested switch mutates nothing in that mode.
+  let thinking = resolveThinking(analysis, decision.target, decision.tier);
+
   if (keepCurrent) {
+    const applied = applyThinking(thinking.level);
     runtime.appliedTierIndex = decision.tierIndex;
     runtime.lastDecision = decision;
     runtime.lastAnalysis = analysis;
     setStatus(ctx, `jev-router:${decision.tier} ✓`);
-    appendDecisionEntry(analysis, decision, "kept", runtime);
-    return { action: "kept", message: `${headline} — already active` };
+    appendDecisionEntry(analysis, decision, "kept", runtime, thinking, applied);
+    return { action: "kept", message: `${headline} — already active · ${describeThinking(thinking, applied)}` };
   }
 
   if (runtime.config.mode === "notify") {
     statusLine(ctx, runtime);
-    notify(ctx, `${headline}\n${detail}`, "info");
-    appendDecisionEntry(analysis, decision, "notified", runtime);
+    notify(ctx, `${headline}\n${detail}\n${describeThinking(thinking)} — not applied (notify mode)`, "info");
+    appendDecisionEntry(analysis, decision, "notified", runtime, thinking);
     return { action: "notified", message: `${headline} (notify only)` };
   }
 
@@ -358,6 +404,10 @@ async function applyDecision(
     }
   }
 
+  // The confirm prompt may have swapped the target: re-resolve so a config
+  // pin belongs to the model we are actually switching to.
+  thinking = resolveThinking(analysis, decision.target, decision.tier);
+
   const model =
     decision.model && typeof ctx.modelRegistry?.find === "function"
       ? ctx.modelRegistry.find(decision.model.provider, decision.model.id)
@@ -377,16 +427,14 @@ async function applyDecision(
   }
 
   if (previous && previous !== `${model.provider}/${model.id}`) runtime.previousModelKey = previous;
-  if (decision.target.thinkingLevel) {
-    setThinking(decision.target.thinkingLevel);
-  }
+  const applied = applyThinking(thinking.level);
 
   runtime.appliedTierIndex = decision.tierIndex;
   runtime.lastDecision = decision;
   runtime.lastAnalysis = analysis;
   statusLine(ctx, runtime);
-  notify(ctx, `${headline}\n${detail}`, "info");
-  appendDecisionEntry(analysis, decision, "switched", runtime);
+  notify(ctx, `${headline}\n${detail}\n${describeThinking(thinking, applied)}`, "info");
+  appendDecisionEntry(analysis, decision, "switched", runtime, thinking, applied);
   return { action: "switched", message: `${headline}` };
 }
 
@@ -403,16 +451,27 @@ async function switchModel(model: unknown): Promise<boolean> {
   }
 }
 
-function setThinking(level: string): void {
-  if (!api || typeof api.setThinkingLevel !== "function") return;
+/**
+ * Apply a thinking level and read back what pi actually kept: pi clamps the
+ * level to the model's capabilities, so the readback — not the judgment — is
+ * the truth recorded in the decision entry.
+ */
+function applyThinking(level: ThinkingLevel): ThinkingLevel | undefined {
+  if (api && typeof api.setThinkingLevel === "function") {
+    try {
+      api.setThinkingLevel(level as never);
+    } catch {
+      // Unsupported levels are swallowed by pi; the readback below reports reality.
+    }
+  }
   try {
-    api.setThinkingLevel(level as never);
+    return api && typeof api.getThinkingLevel === "function" ? (api.getThinkingLevel() as ThinkingLevel) : undefined;
   } catch {
-    // Clamping is model-specific; ignore unsupported levels.
+    return undefined;
   }
 }
 
-function formatAnalysis(analysis: RouteAnalysis): string {
+function formatAnalysis(analysis: RouteAnalysis, decision?: Decision): string {
   const probs = sanitizeRemote(
     Object.entries(analysis.kindProbabilities)
       .sort((a, b) => b[1] - a[1])
@@ -425,6 +484,9 @@ function formatAnalysis(analysis: RouteAnalysis): string {
     `complexity: ${analysis.complexity.toFixed(2)}/3 (conf ${analysis.complexityConfidence.toFixed(2)})`,
     `capability deserved: ${analysis.budgetIntensity.toFixed(2)}/3 (conf ${analysis.budgetIntensityConfidence.toFixed(2)})`,
     `deep reasoning: ${(analysis.deepReasoning * 100).toFixed(0)}%`,
+    decision
+      ? describeThinking(resolveThinking(analysis, decision.target, decision.tier))
+      : `thinking: ${analysis.thinkingLevel ?? "not judged — ladder resolves it at decision time"}`,
     `jev latency: ${analysis.latencyMs}ms`,
   ].join("\n");
 }
@@ -483,6 +545,8 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
               0,
             ),
           );
+          const thinkingLine = entryThinkingLine(data);
+          if (thinkingLine) box.addChild(new Text(theme.fg("dim", thinkingLine), 0, 0));
         }
         return box;
       });
@@ -656,7 +720,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
           const { analysis, decision } = result;
           notify(ctx, 
             [
-              formatAnalysis(analysis),
+              formatAnalysis(analysis, decision),
               "",
               decision ? describeDecision(decision) : "no route available",
               decision?.notes.length ? decision.notes.join("\n") : "",
@@ -728,7 +792,7 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
       }
       const { analysis, decision } = result;
       notify(ctx, 
-        [formatAnalysis(analysis), "", decision ? describeDecision(decision) : "no route available"].join("\n"),
+        [formatAnalysis(analysis, decision), "", decision ? describeDecision(decision) : "no route available"].join("\n"),
         "info",
       );
     },
@@ -746,11 +810,15 @@ export default async function jevRouterExtension(pi: ExtensionAPI): Promise<void
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const result = await analyse(params.request, ctx, runtime);
       if ("error" in result) {
-        return { content: [{ type: "text", text: `jev_route error: ${result.error}` }], isError: true };
+        return {
+          content: [{ type: "text", text: `jev_route error: ${result.error}` }],
+          isError: true,
+          details: { error: result.error },
+        };
       }
       const { analysis, decision } = result;
       const text = [
-        formatAnalysis(analysis),
+        formatAnalysis(analysis, decision),
         "",
         decision ? describeDecision(decision) : "no route available",
         decision?.notes.length ? `notes: ${decision.notes.join("; ")}` : "",

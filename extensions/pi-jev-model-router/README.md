@@ -2,23 +2,26 @@
 
 A pi extension that routes every prompt to a model tier using **TypeSafe Jev**
 (System One) typed judgments. You type normally; before the turn starts, Jev
-reads the request and answers four narrow questions, code composes those into a
-tier, applies your budget policy, and pi switches to the matching model.
+reads the request and answers five narrow questions, code composes those into a
+tier plus a thinking level, applies your budget policy, and pi switches to the
+matching model.
 
 ```
 you type a prompt
         │
         ▼
-   Jev (one request, 4 parallel questions)
+   Jev (one request, 5 parallel questions)
      • task_kind            choice: plan / implement / debug / refactor / review / research / explain / operate / write / chat
      • complexity           score:  trivial → architectural
      • capability_deserved  score:  minimal → maximum (price ignored)
      • needs_deep_reasoning noul:   yes/no probability
+     • thinking_level       choice: off → max (how deep should this task think)
         │
         ▼
    code composes the decision
      demand = 0.55·complexity + 0.45·capability (+ reasoning nudge)
      demand = max(demand, kind floor)          # planning/review never go cheap
+     thinking = pin > Jev judgment > demand ladder > tier default
      confidence guard → budget guard → availability guard → cache guard
         │
         ▼
@@ -42,7 +45,8 @@ plan · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high (used 
 
 Expand the entry (same key as other collapsible content) to see the raw judgment:
 kind and its confidence, complexity, capability deserved, deep-reasoning
-probability, composed demand score, and budget pressure.
+probability, composed demand score, budget pressure, and the thinking level —
+resolved, judged, and the value pi actually applied after per-model clamping.
 
 The glyph encodes the action: `→` switched, `=` already active (stickiness),
 `•` notify-only mode, `×` skipped (kept current / unavailable). Entries are stored
@@ -131,10 +135,10 @@ settings.
   "stickiness": true,
   "budget": { "dailyUsd": 5, "monthlyUsd": 100, "softRatio": 0.7, "hardRatio": 0.9 },
   "routes": {
-    "quick":    [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash", "thinkingLevel": "off" }],
-    "standard": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro", "thinkingLevel": "low" }],
-    "high":     [{ "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest", "thinkingLevel": "medium" }],
-    "premium":  [{ "provider": "openrouter", "model": "~anthropic/claude-opus-latest", "thinkingLevel": "high" }]
+    "quick":    [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash" }],
+    "standard": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro" }],
+    "high":     [{ "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest" }],
+    "premium":  [{ "provider": "openrouter", "model": "~anthropic/claude-opus-latest" }]
   },
   "kindModels": {
     "implement": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro", "minTier": "standard" }]
@@ -142,6 +146,29 @@ settings.
   "kindMinimumTier": { "plan": "high", "review": "high", "implement": "standard" }
 }
 ```
+
+### Thinking levels
+
+Jev's fifth question (`thinking_level`) judges how deep the *task* should think
+(`off` → `max`); the model and its price are excluded from the rubric.
+Resolution precedence, first hit wins:
+
+1. **config pin** — `thinkingLevel` written on a route entry (explicit intent).
+   With the default `kindModels`, a *switched* decision's target comes from the
+   kind chain, so pin on the `kindModels` entry you actually route to; `routes`
+   pins govern kept/held decisions and config-only setups.
+2. **Jev judgment** — the fifth question's answer
+3. **demand ladder** — pure-code fallback when the answer is missing: same rungs
+   as the tier table, `xhigh` only at the very top of demand
+4. **tier default** — `TIER_THINKING` (`quick: off`, `standard: low`,
+   `high: medium`, `premium: high`)
+
+The level is applied when the router keeps, holds, or switches to a model —
+including after a manual model switch, so thinking no longer goes stale. pi
+clamps per model, and the decision entry records what was **actually applied**
+after clamping, beside the resolved and judged values. In `notify` mode a
+suggested switch still mutates nothing: the entry and notification show the
+resolved level annotated `not applied (notify mode)`.
 
 ### Two axes of routing
 

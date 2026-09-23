@@ -1,5 +1,5 @@
-import type { JevRouterConfig } from "./config";
-import { TASK_KINDS } from "./config";
+import type { JevRouterConfig, ThinkingLevel } from "./config";
+import { TASK_KINDS, THINKING_LEVELS } from "./config";
 
 /** The one URL any key or payload can ever reach. Hardcoded on purpose. */
 const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
@@ -25,6 +25,14 @@ export interface RouteAnalysis {
   budgetIntensityConfidence: number;
   /** Probability this request needs extended reasoning rather than recall/short edits. */
   deepReasoning: number;
+  /**
+   * Raw answer to the 5th question: how deep should this task think?
+   * Undefined when the server omits or mangles it → the decision layer falls
+   * back to the demand ladder, then to the tier static default.
+   */
+  thinkingLevel?: ThinkingLevel;
+  /** Jev's confidence in the thinking-level choice, when provided. */
+  thinkingConfidence?: number;
   latencyMs: number;
   usage?: { input_tokens: number; output_tokens: number };
 }
@@ -56,7 +64,8 @@ function buildState(input: ClassifyInput): Record<string, unknown> {
   };
 }
 
-function buildQuestions(): Record<string, unknown> {
+/** The question set (5 questions, parallel server-side). Exported for the A/B latency probe. */
+export function buildQuestions(): Record<string, unknown> {
   return {
     task_kind: {
       type: "choice",
@@ -95,6 +104,20 @@ function buildQuestions(): Record<string, unknown> {
         false: "The work is recall, lookup, formatting, or a short direct change",
       },
     },
+    thinking_level: {
+      type: "choice",
+      instructions:
+        "Judging only the work `request` asks for: how much extended pre-answer thinking (reasoning before replying) does a good outcome genuinely deserve? Ignore which model will answer, what it costs, and how the reply will be delivered. Pick the deepest level the task actually needs, but never escalate for recall, lookup, formatting, or short direct edits.",
+      criteria: {
+        off: "No pre-answer reasoning needed: greetings, lookups, formatting, mechanical rewrites",
+        minimal: "A quick sanity pass: short answers, simple one-step edits, routine commands",
+        low: "Light reasoning: a few dependent steps, straightforward debugging or explanation",
+        medium: "Real reasoning: multi-file changes, design tradeoffs, careful root-cause analysis",
+        high: "Deep extended reasoning: architecture, subtle debugging, long-horizon planning",
+        xhigh: "Exceptionally hard: novel algorithms, cross-cutting high-stakes design, proof-like work",
+        max: "Maximum deliberation: correctness is critical and the task is genuinely frontier-hard",
+      },
+    },
   };
 }
 
@@ -117,6 +140,7 @@ function parseAnalysis(payload: unknown, latencyMs: number): RouteAnalysis {
   const complexity = answers.complexity ?? {};
   const capability = answers.capability_deserved ?? {};
   const reasoning = answers.needs_deep_reasoning ?? {};
+  const thinking = answers.thinking_level ?? {};
 
   const chosenKind = typeof kind.choice === "string" ? kind.choice : "chat";
   if (!Object.hasOwn(TASK_KINDS, chosenKind)) {
@@ -132,6 +156,13 @@ function parseAnalysis(payload: unknown, latencyMs: number): RouteAnalysis {
     budgetIntensity: num(capability.score) ?? 1,
     budgetIntensityConfidence: num(capability.confidence) ?? 0,
     deepReasoning: num(reasoning.noul) ?? num(reasoning.noul_score) ?? 0,
+    // A missing/unknown 5th answer is not an error: resolveThinking() falls
+    // back to the demand ladder, then to the tier static default.
+    thinkingLevel:
+      typeof thinking.choice === "string" && (THINKING_LEVELS as readonly string[]).includes(thinking.choice)
+        ? (thinking.choice as ThinkingLevel)
+        : undefined,
+    thinkingConfidence: num(thinking.confidence),
     latencyMs,
     usage:
       root.usage && num(root.usage.input_tokens) !== undefined
@@ -190,7 +221,7 @@ async function postWithRetry(
   throw lastError instanceof Error ? lastError : new JevError("TypeSafe request failed");
 }
 
-/** Run one Jev evaluation (4 questions, parallel server-side) for the prompt. */
+/** Run one Jev evaluation (5 questions, parallel server-side) in one HTTP round trip. */
 export async function classifyRequest(
   input: ClassifyInput,
   config: JevRouterConfig,

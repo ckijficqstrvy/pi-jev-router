@@ -2,9 +2,9 @@
 
 A [pi](https://github.com/earendil-works/pi) extension that routes every prompt to
 a task-appropriate model using **TypeSafe Jev** (System One) typed judgments.
-You type normally; before the turn starts, Jev reads the request and answers four
-narrow questions, code composes those into a capability tier, applies your budget
-policy, and pi switches to the matching model.
+You type normally; before the turn starts, Jev reads the request and answers five
+narrow questions, code composes those into a capability tier plus a thinking
+level, applies your budget policy, and pi switches to the matching model.
 
 ![Routing decision shown in the transcript](assets/decision-entry.png)
 
@@ -22,16 +22,18 @@ policy, and pi switches to the matching model.
 you type a prompt
         │
         ▼
-   Jev (one request, 4 parallel questions)
+   Jev (one request, 5 parallel questions)
      • task_kind            choice: plan / implement / debug / refactor / review / research / explain / operate / write / chat
      • complexity           score:  trivial → architectural
      • capability_deserved  score:  minimal → maximum (price ignored)
      • needs_deep_reasoning noul:   yes/no probability
+     • thinking_level       choice: off → max (how deep should this task think)
         │
         ▼
    code composes the decision
      demand = 0.55·complexity + 0.45·capability (+ reasoning nudge)
      demand = max(demand, kind floor)          # planning/review never go cheap
+     thinking = pin > Jev judgment > demand ladder > tier default
      confidence guard → budget guard → availability guard → cache guard
         │
         ▼
@@ -157,8 +159,9 @@ plan · complexity 1.70/3 · capability 1.55/3 · reasoning 0.82 → high (used 
 The glyph encodes the action: `→` switched, `=` already active (stickiness),
 `•` notify-only mode, `×` skipped. Expand the entry for the raw judgment: kind
 and confidence, complexity, capability deserved, deep-reasoning probability,
-composed demand, and budget pressure. Entries are stored in the session but never
-sent to the LLM, so they cost no context.
+composed demand, budget pressure, and the thinking level — resolved, judged,
+and the value pi actually applied after per-model clamping. Entries are stored
+in the session but never sent to the LLM, so they cost no context.
 
 Prompts that are deliberately not routed are shown too, so behaviour is never
 silently missing:
@@ -174,12 +177,15 @@ using openrouter/~anthropic/claude-opus-latest
 The defaults target **OpenRouter**, because it exposes a large catalogue through a
 single provider id. Four capability tiers, each an ordered fallback chain:
 
-| Tier | Order tried | thinkingLevel |
+| Tier | Order tried | Tier thinking default* |
 | --- | --- | --- |
 | `quick` | `xiaomi/mimo-v2.6-flash` | `off` |
 | `standard` | `xiaomi/mimo-v2.6-pro` | `low` |
 | `high` | `~anthropic/claude-sonnet-latest` | `medium` |
 | `premium` | `~anthropic/claude-opus-latest` | `high` |
+
+\* Fallback rung (last in line — see **Thinking levels** below); by default the
+level is judged per task by Jev's fifth question.
 
 Plus kind specialists, tried before the tier chain when the chosen tier is high
 enough (`minTier`):
@@ -207,6 +213,53 @@ refresh the slugs if they are gone.
 
 Run `/jev-router` to see this for your own setup, with a `✓`/`✗` per route
 showing what is actually available and authenticated.
+
+## Thinking levels: judged per task, pinnable per route
+
+Jev's fifth question (`thinking_level`, a `choice` from `off` to `max`) judges
+how much extended pre-answer thinking the *task* deserves — the model and its
+price are excluded from the rubric. The level is resolved per prompt, first hit
+wins:
+
+1. **Config pin** — `thinkingLevel` written on a route entry in `config.json`:
+   explicit user intent beats everything.
+   *Where to pin matters:* with the default `kindModels` covering every kind,
+   a **switched** decision's target usually comes from the kind chain, not the
+   tier chain — so pin `thinkingLevel` on the `kindModels` entry you actually
+   route to. `routes` pins still govern kept/held decisions (their target is
+   looked up from `routes` first) and config-only setups without kind chains.
+   Verified end-to-end: a pin on `kindModels.refactor[0]` beat Jev's `minimal`
+   judgment, and a pin of `max` on the flash entry clamped to `high` on
+   readback.
+2. **Jev judgment** — the fifth question's answer.
+3. **Demand ladder** — pure-code fallback when the fifth answer is missing or
+   invalid: `demand < 0.5 → off`, `< 1.5 → low`, `< 2.5 → medium`, `< 2.9 →
+   high`, else `xhigh` (demand pinned at the top = architectural + deep
+   reasoning).
+4. **Tier default** — `TIER_THINKING` (`quick: off`, `standard: low`,
+   `high: medium`, `premium: high`), i.e. exactly what the router used before
+   the fifth question existed.
+
+Every layer is optional and each fallback is backward-compatible, so routing
+never behaves worse than the old static table — a missing fifth answer just
+lands one layer down. The resolved level is applied whenever the router **keeps,
+holds, or switches to** a model. The kept/held paths used to skip it entirely,
+which left thinking stale after a manual model switch or a cache hold; that is
+fixed.
+
+`pi.setThinkingLevel` clamps to the model's capabilities, so the entry records
+what pi **actually applied** (read back via `getThinkingLevel`) beside the
+resolved and raw-judged values:
+
+```
+thinking medium (jev) → applied low (clamped by model)     ← expanded entry
+thinking high (pin, judged medium) → applied high
+```
+
+In `notify` mode a *suggested switch* still mutates nothing: the notification
+shows the resolved level annotated `not applied (notify mode)`. When the
+decision keeps or holds the current model, the level is applied in every mode —
+that is the stale-thinking fix, not a model switch.
 
 ## Extending to more models and providers
 
@@ -292,7 +345,8 @@ Each tier is a **candidate chain**, tried top to bottom. The first model that
 exists in pi's catalogue *and* is authenticated wins; if none are usable the
 router steps to the nearest tier instead of failing. Add `"thinkingLevel"` to any
 entry to pin it (`"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"`;
-pi clamps it per model).
+pi clamps it per model). A pin beats Jev's per-task thinking judgment — the full
+precedence chain is under **Thinking levels** above.
 
 Mixing providers is fine — put an OpenRouter model and a direct-Anthropic model in
 the same chain.
@@ -470,7 +524,7 @@ new `$5/day` / `$100/month` budget defaults now apply unless you set your own.
 | `historyTurns` | `0` | Conversation turns included as Jev state (`0` sends none) |
 | `confidenceThreshold` | `0.34` | Below this, fall back to `standard` instead of spending premium |
 | `stickiness` | `true` | Keep the current model when it is already the chosen one |
-| `routes` | see above | Capability tier candidate chains |
+| `routes` | see above | Capability tier candidate chains (an entry's `thinkingLevel` pins the thinking level) |
 | `kindModels` | see above | Task-specialist chains with `minTier` |
 | `kindMinimumTier` | see above | Per-kind floor tier |
 | `budget` | `$5/day`, `$100/month` | Spend policy (`0` disables a cap) |

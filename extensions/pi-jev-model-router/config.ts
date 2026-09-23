@@ -25,13 +25,32 @@ export type Tier = "quick" | "standard" | "high" | "premium";
 export const TIERS: readonly Tier[] = ["quick", "standard", "high", "premium"] as const;
 
 export type Mode = "auto" | "confirm" | "notify";
+export const MODES: readonly Mode[] = ["auto", "confirm", "notify"] as const;
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-const THINKING_LEVELS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+export const THINKING_LEVELS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Static thinking level per tier — the last-resort fallback in the resolution
+ * chain (config pin > Jev's 5th-question judgment > demand ladder > this).
+ * These used to sit as `thinkingLevel` on the default route entries; they moved
+ * here so the per-task judgment can win by default. Adding `thinkingLevel` to a
+ * route in config.json still pins it and beats the judgment.
+ */
+export const TIER_THINKING: Record<Tier, ThinkingLevel> = {
+  quick: "off",
+  standard: "low",
+  high: "medium",
+  premium: "high",
+};
 
 export interface RouteTarget {
   provider: string;
   model: string;
-  /** Optional thinking level pinned for this model. Clamped by pi per model. */
+  /**
+   * Config pin, set only when config.json writes it explicitly: it wins over
+   * Jev's per-task thinking judgment (precedence: pin > Jev > ladder > tier
+   * default). Clamped by pi per model.
+   */
   thinkingLevel?: ThinkingLevel;
   /**
    * Only used inside `kindModels`: this model may serve the kind when the
@@ -117,11 +136,14 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
   historyTurns: 0,
   confidenceThreshold: 0.34,
   stickiness: true,
+  // No `thinkingLevel` here on purpose: the default is "let Jev's 5th-question
+  // judgment decide" (with TIER_THINKING as fallback). Write thinkingLevel in
+  // config.json to pin a route.
   routes: {
-    quick: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-flash", thinkingLevel: "off" }],
-    standard: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-pro", thinkingLevel: "low" }],
-    high: [{ provider: "openrouter", model: "~anthropic/claude-sonnet-latest", thinkingLevel: "medium" }],
-    premium: [{ provider: "openrouter", model: "~anthropic/claude-opus-latest", thinkingLevel: "high" }],
+    quick: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-flash" }],
+    standard: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-pro" }],
+    high: [{ provider: "openrouter", model: "~anthropic/claude-sonnet-latest" }],
+    premium: [{ provider: "openrouter", model: "~anthropic/claude-opus-latest" }],
   },
   kindModels: {
     // Planning and design: strongest long-horizon reasoners.

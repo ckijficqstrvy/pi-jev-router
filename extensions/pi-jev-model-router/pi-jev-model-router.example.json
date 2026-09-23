@@ -21,16 +21,16 @@
   },
   "routes": {
     "quick": [
-      { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash", "thinkingLevel": "off" }
+      { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-flash" }
     ],
     "standard": [
-      { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro", "thinkingLevel": "low" }
+      { "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro" }
     ],
     "high": [
-      { "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest", "thinkingLevel": "medium" }
+      { "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest" }
     ],
     "premium": [
-      { "provider": "openrouter", "model": "~anthropic/claude-opus-latest", "thinkingLevel": "high" }
+      { "provider": "openrouter", "model": "~anthropic/claude-opus-latest" }
     ]
   },
   "kindModels": {

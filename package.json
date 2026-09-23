@@ -1,6 +1,6 @@
 {
   "name": "pi-jev-model-router",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Route pi prompts to task-appropriate model tiers with TypeSafe Jev typed judgments. Budget-aware, with automatic fallback.",
   "author": {
     "name": "Shah Rukh",
@@ -20,6 +20,10 @@
   ],
   "license": "MIT",
   "type": "module",
+  "scripts": {
+    "test": "esbuild test/thinking.test.ts --bundle --packages=external --platform=node --format=esm --outfile=node_modules/.cache/jev-test.mjs --log-level=warning && node node_modules/.cache/jev-test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ckijficqstrvy/pi-jev-router.git"
@@ -49,5 +53,11 @@
     "@earendil-works/pi-tui": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-tui": "^0.87.1",
+    "@types/node": "^26.6.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   }
 }

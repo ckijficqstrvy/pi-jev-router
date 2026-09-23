@@ -1,5 +1,5 @@
-import type { JevRouterConfig, RouteChain, RouteTarget, Tier } from "./config";
-import { TIERS } from "./config";
+import type { JevRouterConfig, RouteChain, RouteTarget, ThinkingLevel, Tier } from "./config";
+import { TIER_THINKING, TIERS } from "./config";
 import type { SpendSnapshot } from "./budget";
 import { formatUsd } from "./budget";
 import type { RouteAnalysis } from "./jev";
@@ -40,6 +40,71 @@ export function tierIndex(tier: Tier | undefined): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+/** Composed demand, shared by decide() and the thinking fallback ladder. */
+export function demandScore(analysis: RouteAnalysis): number {
+  let demand = 0.55 * analysis.complexity + 0.45 * analysis.budgetIntensity;
+  if (analysis.deepReasoning >= 0.65) demand += 0.75;
+  else if (analysis.deepReasoning <= 0.2) demand -= 0.25;
+  return clamp(demand, 0, 3);
+}
+
+/** Where a resolved thinking level came from (resolution order = declaration order). */
+export type ThinkingSource = "pin" | "jev" | "ladder" | "tier";
+
+export interface ThinkingResolution {
+  level: ThinkingLevel;
+  source: ThinkingSource;
+  /** Raw 5th-question answer, when Jev gave a valid one (may differ from `level` when pinned). */
+  judged?: ThinkingLevel;
+}
+
+/**
+ * Fallback (C): pure-code ladder for when the 5th question's answer is missing.
+ * Rungs line up with today's tier table at integer demand (0→off, 1→low,
+ * 2→medium, 2.5+→high); xhigh only when demand is pinned at the very top
+ * (architectural + deep reasoning). `minimal`/`max` stay reachable only through
+ * Jev's judgment or a config pin — the ladder never invents extremes.
+ */
+export function thinkingLadder(analysis: RouteAnalysis): ThinkingLevel | undefined {
+  if (!Number.isFinite(analysis.complexity) || !Number.isFinite(analysis.budgetIntensity)) return undefined;
+  const demand = demandScore(analysis);
+  if (demand < 0.5) return "off";
+  if (demand < 1.5) return "low";
+  if (demand < 2.5) return "medium";
+  if (demand < 2.9) return "high";
+  return "xhigh";
+}
+
+/**
+ * Resolve the thinking level for a decision:
+ *   config pin > Jev's 5th-question judgment > demand ladder > tier static default.
+ * Every layer is optional; each fallback is backward-compatible, so the chain
+ * can never do worse than the pre-judgment behaviour (the tier table).
+ */
+export function resolveThinking(
+  analysis: RouteAnalysis | undefined,
+  target: RouteTarget | undefined,
+  tier: Tier,
+): ThinkingResolution {
+  const judged = analysis?.thinkingLevel;
+  if (target?.thinkingLevel) return { level: target.thinkingLevel, source: "pin", judged };
+  if (judged) return { level: judged, source: "jev", judged };
+  const ladder = analysis ? thinkingLadder(analysis) : undefined;
+  if (ladder) return { level: ladder, source: "ladder", judged };
+  return { level: TIER_THINKING[tier] ?? "low", source: "tier", judged };
+}
+
+/** One-line audit text: `thinking medium (jev) → applied low (clamped by model)`. */
+export function describeThinking(res: ThinkingResolution, applied?: ThinkingLevel): string {
+  let text = `thinking ${res.level} (${res.source}`;
+  if (res.judged && res.judged !== res.level) text += `, judged ${res.judged}`;
+  text += ")";
+  if (applied !== undefined) {
+    text += applied === res.level ? ` → applied ${applied}` : ` → applied ${applied} (clamped by model)`;
+  }
+  return text;
 }
 
 export function findModel(
@@ -145,10 +210,7 @@ export function decide(
   const notes: string[] = [];
   const { spend } = options;
 
-  let demand = 0.55 * analysis.complexity + 0.45 * analysis.budgetIntensity;
-  if (analysis.deepReasoning >= 0.65) demand += 0.75;
-  else if (analysis.deepReasoning <= 0.2) demand -= 0.25;
-  demand = clamp(demand, 0, 3);
+  let demand = demandScore(analysis);
 
   const kindFloor = tierIndex(config.kindMinimumTier[analysis.kind] ?? "quick");
   if (demand < kindFloor) {
