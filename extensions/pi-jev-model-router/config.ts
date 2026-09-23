@@ -154,14 +154,19 @@ export const DEFAULT_CONFIG: JevRouterConfig = {
       { provider: "openrouter", model: "xiaomi/mimo-v2.6-flash" },
     ],
     standard: [{ provider: "openrouter", model: "xiaomi/mimo-v2.6-pro" }],
-    // gpt-6-astra 46–53 vs sonnet-5 23–38 on the same index: the old high
-    // pick was scoring below the standard tier. Exact slug, not ~latest:
-    // an alias jump must not silently change this tier's price class.
+    // Budget pick (2026-09): no first-tier flagships at high/premium.
+    // GLM-5.3 ≈45 with strong agentic-terminal reputation; K3 (1M ctx,
+    // Frontend Arena #1) as vendor-diverse fallback.
     high: [
-      { provider: "openrouter", model: "openai/gpt-6-astra" },
-      { provider: "openrouter", model: "~anthropic/claude-sonnet-latest" },
+      { provider: "openrouter", model: "~z-ai/glm-latest" },
+      { provider: "openrouter", model: "moonshotai/kimi-k3" },
     ],
-    premium: [{ provider: "openrouter", model: "~anthropic/claude-opus-latest" }],
+    // gpt-6-sol: strongest non-flagship agentic coder (Terminal-Bench 4.0
+    // 43%, $2/$10 — a fifth of gpt-6-astra); GLM as fallback.
+    premium: [
+      { provider: "openrouter", model: "openai/gpt-6-sol" },
+      { provider: "openrouter", model: "~z-ai/glm-latest" },
+    ],
   },
   kindModels: {
     // Planning and design: strongest long-horizon reasoners.

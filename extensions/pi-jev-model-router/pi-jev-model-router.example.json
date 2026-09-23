@@ -26,10 +26,13 @@
     ],
     "standard": [{ "provider": "openrouter", "model": "xiaomi/mimo-v2.6-pro" }],
     "high":     [
-      { "provider": "openrouter", "model": "openai/gpt-6-astra" },
-      { "provider": "openrouter", "model": "~anthropic/claude-sonnet-latest" }
+      { "provider": "openrouter", "model": "~z-ai/glm-latest" },
+      { "provider": "openrouter", "model": "moonshotai/kimi-k3" }
     ],
-    "premium":  [{ "provider": "openrouter", "model": "~anthropic/claude-opus-latest" }]
+    "premium":  [
+      { "provider": "openrouter", "model": "openai/gpt-6-sol" },
+      { "provider": "openrouter", "model": "~z-ai/glm-latest" }
+    ]
   },
   "kindModels": {
     "plan": [

@@ -181,18 +181,23 @@ single provider id. Four capability tiers, each an ordered fallback chain:
 | --- | --- | --- |
 | `quick` | `~z-ai/glm-flash-latest` → `xiaomi/mimo-v2.6-flash` | `off` |
 | `standard` | `xiaomi/mimo-v2.6-pro` | `low` |
-| `high` | `openai/gpt-6-astra` → `~anthropic/claude-sonnet-latest` | `medium` |
-| `premium` | `~anthropic/claude-opus-latest` | `high` |
+| `high` | `~z-ai/glm-latest` → `moonshotai/kimi-k3` | `medium` |
+| `premium` | `openai/gpt-6-sol` → `~z-ai/glm-latest` | `high` |
 
 \* Fallback rung (last in line — see **Thinking levels** below); by default the
 level is judged per task by Jev's fifth question.
 
-Model picks refreshed against the Artificial Analysis intelligence index
-(2026-09): `glm-flash` ≈42 and `gpt-6-astra` 46–53 replaced weaker picks at
-`quick`/`high` (the old `high` pick scored *below* the `standard` tier's 46),
-and the demoted models stay in the chain as fallbacks. `openai/gpt-6-astra` is
-pinned as an exact slug rather than `~openai/gpt-astra-latest` on purpose: an
-alias jump must not silently change the tier's price class.
+Model picks follow a **no-first-tier-flagships budget** (2026-09): `quick` runs
+`~z-ai/glm-flash-latest` (AA ≈42) over mimo-flash; `high` runs `~z-ai/glm-latest`
+(GLM-5.3 ≈45, agentic-terminal reputation) with `moonshotai/kimi-k3` (1M ctx,
+Frontend Arena #1) as fallback; `premium` runs `openai/gpt-6-sol` ($2/$10 — a
+fifth of GPT-6 Astra — and Terminal-Bench 4.0 43%, the strongest non-flagship
+agentic coder) with GLM as fallback. Honest trade-off: the non-flagship
+celing on the composite AA index is ≈48 (sol at max thinking) while
+`standard`'s mimo-pro already scores 46, so the `high`/`premium` step-up is
+agentic ability, context and vendor diversity — not raw composite score.
+Flagships (Astra/Opus) stay out of the chains by choice; add them back via a
+config pin if a job ever warrants it.
 
 Plus kind specialists, tried before the tier chain when the chosen tier is high
 enough (`minTier`):
